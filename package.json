@@ -8,6 +8,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types",
     "agent:start": "turbo run agent:start",
+    "evaluation-worker:start": "turbo run evaluation-worker:start",
     "db:generate": "bun run --cwd packages/db db:generate",
     "db:validate": "bun run --cwd packages/db db:validate",
     "db:migrate": "bun run --cwd packages/db db:migrate",

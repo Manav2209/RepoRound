@@ -3,6 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/server.ts",
+    "./evaluation": "./src/evaluation/public.ts",
+    "./jobs/evaluation-relay": "./src/jobs/evaluation-relay.ts",
+    "./jobs/redis": "./src/jobs/redis.ts"
+  },
   "scripts": {
     "dev": "bun run src/server.ts",
     "start": "bun run src/server.ts",
@@ -14,8 +20,11 @@
   "dependencies": {
     "@repo/db": "*",
     "@repo/voice-types": "*",
+    "bullmq": "^6.3.16",
     "dotenv": "^16.4.5",
+    "falkordb": "^6.8.0",
     "hono": "^4.6.0",
+    "ioredis": "^6.0.0",
     "livekit-server-sdk": "^2.0.0",
     "nanoid": "^3.3.18",
     "openai": "^6.49.0",

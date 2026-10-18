@@ -14,6 +14,7 @@ COPY package.json bun.lock ./
 COPY apps/backend/package.json ./apps/backend/
 COPY apps/voice-agent/package.json ./apps/voice-agent/
 COPY apps/web/package.json ./apps/web/
+COPY apps/evaluation-worker/package.json ./apps/evaluation-worker/
 COPY packages/db/package.json ./packages/db/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 COPY packages/providers/package.json ./packages/providers/

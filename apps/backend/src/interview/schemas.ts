@@ -76,7 +76,28 @@ export const questionRecordSchema = z.object({
   spokenAt: z.string().optional(),
   repositoryReferences: z.array(referenceSchema).optional(),
 });
+export const systemDesignPhaseSchema = z.enum([
+  "DESIGN_PENDING",
+  "DISCUSSION",
+  "REVISION_REQUESTED",
+  "REVISION_REVIEW",
+  "FINISHED",
+]);
+export const systemDesignStateSchema = z.object({
+  problemId: z.string().min(1).max(100),
+  phase: systemDesignPhaseSchema.default("DISCUSSION"),
+  activeRevision: z.number().int().nonnegative().default(0),
+  activeSubmissionId: z.string().max(100).optional(),
+  challengeIssued: z.boolean().default(false),
+  revisionSubmitted: z.boolean().default(false),
+  probesAsked: z.array(z.string()).default([]),
+  selectedProbeIds: z.array(z.string()).default([]),
+});
+export type SystemDesignState = z.infer<typeof systemDesignStateSchema>;
+
 export const stateSchema = z.object({
+  mode: z.enum(["GITHUB", "SYSTEM_DESIGN"]).optional(),
+  systemDesign: systemDesignStateSchema.optional(),
   phase: phaseSchema,
   difficulty: difficultySchema,
   objectives: z.array(objectiveSchema).max(20),
@@ -160,6 +181,53 @@ export function initialState(
       .min(1)
       .max(20)
       .parse(objectives)
+      .map((o) => ({
+        ...o,
+        status: "NOT_STARTED",
+        evidenceIds: [],
+        attempts: 0,
+      })),
+    claims: [],
+    evidence: [],
+    questions: [],
+    processedTurns: {},
+    ended: false,
+    skills: {},
+    exploredTopics: [],
+    toolCalls: 0,
+  };
+}
+
+export function initialSystemDesignState(input: {
+  problemId: string;
+  activeRevision: number;
+  activeSubmissionId: string;
+  objectives: unknown;
+  difficulty?: string;
+}): InterviewState {
+  return {
+    mode: "SYSTEM_DESIGN",
+    systemDesign: {
+      problemId: input.problemId,
+      phase: "DISCUSSION",
+      activeRevision: input.activeRevision,
+      activeSubmissionId: input.activeSubmissionId,
+      challengeIssued: false,
+      revisionSubmitted: false,
+      probesAsked: [],
+      selectedProbeIds: [],
+    },
+    phase: "ARCHITECTURE",
+    difficulty:
+      input.difficulty === "EASY"
+        ? "EASY"
+        : input.difficulty === "MEDIUM"
+          ? "MEDIUM"
+          : "HARD",
+    objectives: objectiveSchema
+      .array()
+      .max(20)
+      .parse(input.objectives)
       .map((o) => ({
         ...o,
         status: "NOT_STARTED",

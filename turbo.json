@@ -8,7 +8,16 @@
     "LANGFUSE_SECRET_KEY",
     "GITHUB_TOKEN",
     "INTERVIEW_DURATION_MINUTES",
-    "RECONNECT_WINDOW_SECONDS"
+    "RECONNECT_WINDOW_SECONDS",
+    "FALKORDB_HOST",
+    "FALKORDB_PORT",
+    "FALKORDB_GRAPH",
+    "FALKORDB_TEST_HOST",
+    "FALKORDB_TEST_PORT",
+    "FALKORDB_TEST_GRAPH",
+    "RUN_DB_TESTS",
+    "BULLMQ_REDIS_URL",
+    "EVALUATION_WORKER_CONCURRENCY"
   ],
   "tasks": {
     "@repo/db#build": {
@@ -82,6 +91,26 @@
         "LIVEKIT_API_SECRET",
         "INTERNAL_API_TOKEN",
         "CORS_ALLOWED_ORIGINS"
+      ],
+      "envMode": "loose"
+    },
+    "evaluation-worker:start": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"],
+      "env": [
+        "NODE_ENV",
+        "DATABASE_URL",
+        "BULLMQ_REDIS_URL",
+        "EVALUATION_WORKER_CONCURRENCY",
+        "AI_ROUTER_BASE_URL",
+        "AI_ROUTER_API_KEY",
+        "AI_ROUTER_MODEL",
+        "LLM_TEMPERATURE",
+        "LANGFUSE_BASE_URL",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "VOICE_OUTBOX_DIR"
       ],
       "envMode": "loose"
     },

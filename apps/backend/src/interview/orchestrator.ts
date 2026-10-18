@@ -18,8 +18,28 @@ import type {
   InterviewDifficulty,
   InterviewObjective,
   InterviewState,
+  QuestionRecord,
 } from "./interview.types.js";
+import { getProblem } from "../system-design/problems.js";
+import {
+  activeRevision,
+  getActiveSubmission,
+  getReadySubmissionByRevision,
+} from "../system-design/submissions.js";
+import { designGraphStore } from "../system-design/graph.js";
+import { gatherProbeContext, selectProbe } from "../system-design/probes.js";
+import {
+  challengeQuestion,
+  componentsFromSnapshot,
+  detectRevisionDecision,
+  introQuestion,
+  nudgeQuestion,
+  phraseProbeQuestion,
+  phraseRevisionReview,
+} from "./strategies/system-design.js";
 export { selectObjective } from "./policies.js";
+
+const MAX_SD_PROBES = 3;
 
 const DIFFICULTIES: InterviewDifficulty[] = [
   "EASY",
@@ -50,7 +70,7 @@ export class InterviewOrchestrator {
   private readonly analyzer: AnswerAnalyzer;
   private readonly generator: QuestionGenerator;
   constructor(
-    llm: LlmClient,
+    private readonly llm: LlmClient,
     private readonly durationMinutes = 30,
   ) {
     this.analyzer = new AnswerAnalyzer(llm);
@@ -128,8 +148,11 @@ export class InterviewOrchestrator {
         knowledge: { select: { interviewId: true } },
       },
     });
+    if (!interview) throw new Error("Interview not found");
+    if (interview.mode === "SYSTEM_DESIGN")
+      return this.startSystemDesign(interview, sessionId);
     if (
-      !interview?.interviewPlan ||
+      !interview.interviewPlan ||
       !interview.knowledge ||
       interview.status !== "active"
     )
@@ -214,6 +237,53 @@ export class InterviewOrchestrator {
       return this.response(state, question.id, row.deadlineAt);
     });
   }
+  private async startSystemDesign(
+    interview: {
+      id: string;
+      status: string;
+      systemDesignProblemId: string | null;
+    },
+    sessionId?: string,
+  ): Promise<NextResponse> {
+    const interviewId = interview.id;
+    if (interview.status !== "active")
+      throw new Error("Interview is not active");
+    if (sessionId) await this.validateSession(interviewId, sessionId);
+    const active = await getActiveSubmission(interviewId);
+    if (!active)
+      throw new Error("Interview has no ready architecture submission");
+    const problem = getProblem(interview.systemDesignProblemId ?? "");
+    if (!problem) throw new Error("Unknown system design problem");
+    return withInterviewLock(interviewId, async (token) => {
+      const row = await prisma.interviewRuntime.findUniqueOrThrow({
+        where: { interviewId },
+      });
+      const state = stateSchema.parse(row.data);
+      if (row.deadlineAt <= new Date()) {
+        state.ended = true;
+        state.endReason = "time_limit";
+        transition(state, "FINAL");
+        await this.save(interviewId, token, row.version, state);
+        return { ended: true };
+      }
+      if (state.questions.length || state.ended)
+        return this.response(state, state.questions.at(-1)?.id, row.deadlineAt);
+      const question = introQuestion(state, problem);
+      state.questions.push(question);
+      await this.save(interviewId, token, row.version, state, [
+        domainEvent(interviewId, "interview.started", {
+          phase: state.phase,
+          mode: "SYSTEM_DESIGN",
+        }),
+        domainEvent(interviewId, "interviewer.question", {
+          questionId: question.id,
+          phase: state.phase,
+        }),
+      ]);
+      return this.response(state, question.id, row.deadlineAt);
+    });
+  }
+
   private async validateSession(
     interviewId: string,
     sessionId: string,
@@ -314,6 +384,16 @@ export class InterviewOrchestrator {
           );
           return { ended: true };
         }
+        if (interview.mode === "SYSTEM_DESIGN")
+          return this.continueSystemDesign({
+            interviewId: input.interviewId,
+            token,
+            row,
+            state,
+            turnId: input.turnId,
+            text: input.text,
+            events,
+          });
         const objective = state.objectives.find(
           (o) => o.id === lastQuestion.objectiveId,
         )!;
@@ -471,6 +551,152 @@ export class InterviewOrchestrator {
       }),
     );
   }
+  private async continueSystemDesign(input: {
+    interviewId: string;
+    token: string;
+    row: { version: number; deadlineAt: Date };
+    state: InterviewState;
+    turnId: string;
+    text: string;
+    events: ReturnType<typeof domainEvent>[];
+  }): Promise<NextResponse> {
+    const { interviewId, token, row, state, turnId, text, events } = input;
+    const sd = state.systemDesign;
+    if (!sd) throw new Error("System design interview state is missing");
+    const problem = getProblem(sd.problemId) ?? null;
+    const active = await getActiveSubmission(interviewId);
+    const push = (question: QuestionRecord): void => {
+      state.questions.push({ ...question, sourceTurnId: turnId });
+      state.processedTurns[turnId] = question.id;
+      events.push(
+        domainEvent(interviewId, "interviewer.question", {
+          questionId: question.id,
+          phase: state.phase,
+          mode: "SYSTEM_DESIGN",
+        }),
+      );
+    };
+    const finish = (): void => {
+      state.ended = true;
+      state.endReason = "objectives_completed";
+      transition(state, "FINAL");
+      state.processedTurns[turnId] = "END";
+    };
+    const issueChallenge = (): void => {
+      if (!problem) return;
+      sd.phase = "REVISION_REQUESTED";
+      sd.challengeIssued = true;
+      push(challengeQuestion(state, problem));
+      events.push(
+        domainEvent(interviewId, "system_design.challenge", {
+          problemId: problem.id,
+        }),
+      );
+    };
+    const remaining = Math.max(
+      0,
+      (row.deadlineAt.getTime() - Date.now()) / 60_000,
+    );
+
+    try {
+      if (remaining <= 0 || !problem || !active) {
+        finish();
+      } else if (sd.phase === "DISCUSSION") {
+        if (sd.probesAsked.length >= MAX_SD_PROBES) {
+          issueChallenge();
+        } else {
+          const store = designGraphStore();
+          const ctx = await gatherProbeContext({
+            problem,
+            submissionId: active.submissionId,
+            revision: active.revision,
+            store,
+            askedProbeIds: sd.probesAsked,
+          });
+          const probe = selectProbe(ctx);
+          // A small graph may exhaust its distinct probes before the limit.
+          if (sd.probesAsked.includes(probe.probeId)) {
+            issueChallenge();
+          } else {
+            sd.probesAsked.push(probe.probeId);
+            sd.selectedProbeIds.push(probe.probeId);
+            const question = await phraseProbeQuestion({
+              llm: this.llm,
+              interviewId,
+              problem,
+              probe,
+              components: ctx.components,
+              state,
+            });
+            push(question);
+            events.push(
+              domainEvent(interviewId, "system_design.probe", {
+                probeId: probe.probeId,
+                revision: probe.revision,
+                reason: probe.reason,
+              }),
+            );
+          }
+        }
+      } else if (sd.phase === "REVISION_REQUESTED") {
+        if (sd.revisionSubmitted && active.revision >= 2) {
+          sd.phase = "REVISION_REVIEW";
+          const previous = await getReadySubmissionByRevision(interviewId, 1);
+          const question = await phraseRevisionReview({
+            llm: this.llm,
+            interviewId,
+            problem,
+            previous: previous ? componentsFromSnapshot(previous.snapshot) : [],
+            current: componentsFromSnapshot(active.snapshot),
+            state,
+          });
+          push(question);
+          events.push(
+            domainEvent(interviewId, "system_design.revision_reviewed", {
+              revision: active.revision,
+            }),
+          );
+        } else {
+          const decision = detectRevisionDecision(text);
+          if (decision === "declined") {
+            finish();
+          } else
+            push(
+              nudgeQuestion(
+                state,
+                problem,
+                sd.revisionSubmitted
+                  ? "I see you submitted an update, but I couldn't load it yet. Resubmit so we can review it."
+                  : "When you're ready, resubmit your updated design, or tell me if you'd prefer to keep your current design.",
+              ),
+            );
+        }
+      } else {
+        finish();
+      }
+    } catch (err) {
+      events.push(
+        domainEvent(interviewId, "system_design.degraded", {
+          error: String(err).slice(0, 200),
+        }),
+      );
+      if (!state.ended)
+        push(
+          nudgeQuestion(
+            state,
+            problem ?? ({ id: sd.problemId, title: "your design" } as never),
+            "Let's continue: what is the biggest risk in your design if a downstream dependency fails?",
+          ),
+        );
+    }
+
+    await this.save(interviewId, token, row.version, state, events, {
+      id: turnId,
+      status: "completed",
+    });
+    return this.response(state, state.processedTurns[turnId], row.deadlineAt);
+  }
+
   async recoverAnalysis(interviewId: string, turnId: string): Promise<void> {
     await withInterviewLock(interviewId, async (token) => {
       const turn = await prisma.conversationTurn.findUnique({

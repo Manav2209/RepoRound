@@ -3,7 +3,10 @@ import { LiveKitService } from "./livekit.service.js";
 import { newId, newSessionId } from "../lib/ids.js";
 import type { BackendConfig } from "../config.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { initialState } from "../interview/schemas.js";
+import { initialState, initialSystemDesignState } from "../interview/schemas.js";
+import { getActiveSubmission } from "../system-design/submissions.js";
+import { getProblem } from "../system-design/problems.js";
+import { objectivesForProblem } from "../interview/strategies/system-design.js";
 
 export interface StartSessionResult {
   interviewId: string;
@@ -31,6 +34,7 @@ export class SessionService {
   }
   async startForInterview(interviewId: string): Promise<StartSessionResult> {
     const leaseToken = newId("dispatch");
+    const activeDesign = await getActiveSubmission(interviewId);
     const reserved = await prisma.$transaction(async (tx) => {
       // Serialize allocation across backend processes; dispatch happens after the row exists.
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${interviewId}))::text`;
@@ -41,6 +45,16 @@ export class SessionService {
       if (!interview) throw new SessionError("Interview not found", 404);
       if (!["ready", "active"].includes(interview.status))
         throw new SessionError("Interview cannot be resumed", 409);
+      if (interview.mode === "SYSTEM_DESIGN" && !activeDesign)
+        throw new SessionError(
+          "Submit your architecture before starting the interview",
+          409,
+        );
+      if (
+        interview.mode === "SYSTEM_DESIGN" &&
+        !getProblem(interview.systemDesignProblemId ?? "")
+      )
+        throw new SessionError("Unknown system design problem", 409);
       const now = new Date();
       if (
         interview.runtime &&
@@ -92,7 +106,24 @@ export class SessionService {
               ...data,
             },
           });
-      if (!interview.runtime)
+      if (!interview.runtime) {
+        const problem =
+          interview.mode === "SYSTEM_DESIGN"
+            ? getProblem(interview.systemDesignProblemId ?? "")
+            : null;
+        const initialData =
+          interview.mode === "SYSTEM_DESIGN" && problem && activeDesign
+            ? initialSystemDesignState({
+                problemId: problem.id,
+                activeRevision: activeDesign.revision,
+                activeSubmissionId: activeDesign.submissionId,
+                objectives: objectivesForProblem(problem),
+                difficulty: problem.difficulty,
+              })
+            : initialState(
+                interview.interviewPlan?.objectives,
+                interview.interviewPlan?.difficulty ?? "mid",
+              );
         await tx.interviewRuntime.create({
           data: {
             interviewId,
@@ -100,12 +131,10 @@ export class SessionService {
               now.getTime() +
                 (this.cfg.INTERVIEW_DURATION_MINUTES ?? 30) * 60_000,
             ),
-            data: initialState(
-              interview.interviewPlan?.objectives,
-              interview.interviewPlan?.difficulty ?? "mid",
-            ) as unknown as Prisma.InputJsonValue,
+            data: initialData as unknown as Prisma.InputJsonValue,
           },
         });
+      }
       await tx.interview.update({
         where: { id: interviewId },
         data: { status: "active", startedAt: interview.startedAt ?? now },

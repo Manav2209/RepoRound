@@ -1,4 +1,4 @@
-import GithubInput from "../components/GithubInput";
+import StartInterview from "../components/StartInterview";
 
 export default function Home() {
   return (
@@ -16,15 +16,7 @@ export default function Home() {
         work through follow-ups, and get feedback grounded in your answers.
       </p>
       <section className="start-card">
-        <div className="section-heading">
-          <h2>Start with your repository</h2>
-          <span className="badge">Public GitHub repo</span>
-        </div>
-        <GithubInput />
-        <p className="hint">
-          You’ll need a microphone. Your interview starts after we prepare the
-          questions.
-        </p>
+        <StartInterview />
       </section>
       <div className="feature-grid">
         <article>

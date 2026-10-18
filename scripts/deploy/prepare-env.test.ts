@@ -60,6 +60,24 @@ test("rejects mismatched credentials and invalid database URLs without disclosin
   ).toThrow("DATABASE_URL must be a valid URL");
 });
 
+test("evaluation worker env must mirror the backend queue, router, and database settings", () => {
+  const queue = "BULLMQ_REDIS_URL=redis://cache.internal:6379";
+  const backendWithQueue = `${backend}\n${queue}`;
+  const worker = `${shared}\nDATABASE_URL=postgresql://test:test@localhost/test?sslmode=require\n${queue}`;
+  const result = prepareEnv(backendWithQueue, voice, origin, worker);
+  expect(result.worker).toContain("EVALUATION_WORKER_CONCURRENCY=1\n");
+  expect(result.worker).toContain(`${queue}\n`);
+  expect(result.backend).toContain(`${queue}\n`);
+  expect(() =>
+    prepareEnv(
+      backendWithQueue,
+      voice,
+      origin,
+      worker.replace("cache.", "other."),
+    ),
+  ).toThrow("BULLMQ_REDIS_URL must match");
+});
+
 test("rejects multiline secrets and origins that would change proxy routing", () => {
   expect(() =>
     prepareEnv(backend + '\nGITHUB_TOKEN="line1\\nline2"', voice, origin),

@@ -42,6 +42,9 @@ export class JobWorker {
       const jobs = await prisma.interviewJob.findMany({
         where: {
           interviewId: this.interviewId,
+          // EVALUATE is dispatched to BullMQ by the evaluation relay; the
+          // PostgreSQL poller must never claim it (see evaluation-relay.ts).
+          kind: { not: "EVALUATE" },
           OR: [
             { status: "pending", runAt: { lte: now } },
             { status: "running", leaseUntil: { lt: now } },
@@ -131,7 +134,7 @@ export class JobWorker {
                     error: "Repository preparation failed. Please try again.",
                   },
                 });
-              if (exhausted && ["END", "EVALUATE"].includes(job.kind))
+              if (exhausted && job.kind === "END")
                 await tx.interview.updateMany({
                   where: { id: job.interviewId, status: "completing" },
                   data: {

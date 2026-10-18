@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { evaluationRepo } from "../db/repositories/evaluation.repo.js";
 import { interviewRepo } from "../db/repositories/interview.repo.js";
 import { prisma } from "@repo/db";
+import { problemSummary } from "../system-design/problems.js";
 
 export function createResultsRouter(): Hono {
   const app = new Hono();
@@ -42,7 +43,11 @@ export function createResultsRouter(): Hono {
       select: { questionId: true, analysisStatus: true },
     });
     const summary = {
-      repository: `${interview.owner}/${interview.name}`,
+      repository:
+        interview.owner && interview.name
+          ? `${interview.owner}/${interview.name}`
+          : (problemSummary(interview.systemDesignProblemId ?? "")?.title ??
+            "System design interview"),
       candidateTurns: turns.length,
       answeredQuestions: new Set(turns.map((t) => t.questionId).filter(Boolean))
         .size,

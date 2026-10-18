@@ -72,6 +72,9 @@ jobs:
       - name: Test backend
         run: bun run --cwd apps/backend test
 
+      - name: Test web client state
+        run: bun run --cwd apps/web test
+
       - name: Test deployment env handling
         run: bun test scripts/deploy/prepare-env.test.ts
 
@@ -91,7 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [backend, web, voice-agent]
+        app: [backend, web, voice-agent, evaluation-worker]
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

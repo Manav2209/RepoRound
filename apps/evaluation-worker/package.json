@@ -1,0 +1,29 @@
+{
+  "name": "@repo/evaluation-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "start": "bun run src/main.ts",
+    "evaluation-worker:start": "bun run src/main.ts",
+    "build": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0"
+  },
+  "dependencies": {
+    "@repo/backend": "*",
+    "@repo/db": "*",
+    "bullmq": "^6.3.16",
+    "dotenv": "^16.4.5",
+    "ioredis": "^6.0.0"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "*",
+    "@repo/typescript-config": "*",
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.10.0",
+    "eslint": "10.9.1",
+    "typescript": "7.0.2"
+  }
+}

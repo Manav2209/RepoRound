@@ -15,10 +15,27 @@ import { createInternalRouter } from "./api/internal.js";
 import { InterviewOrchestrator } from "./interview/orchestrator.js";
 import { browserAuthRouter, browserOwnership } from "./api/auth.js";
 import { JobWorker } from "./jobs/queue.js";
+import { Queue } from "bullmq";
+import {
+  EvaluationRelay,
+  EVALUATION_QUEUE,
+} from "./jobs/evaluation-relay.js";
+import { createRedisConnection } from "./jobs/redis.js";
 import { exportTraces } from "./observability/events.js";
 import { prisma } from "@repo/db";
+import {
+  createSystemDesignCatalogRouter,
+  createSystemDesignInterviewRouter,
+} from "./api/system-design.js";
+import { configureDesignGraph } from "./system-design/graph.js";
 
 const config = loadConfig();
+
+configureDesignGraph({
+  host: config.FALKORDB_HOST,
+  port: config.FALKORDB_PORT,
+  graph: config.FALKORDB_GRAPH,
+});
 
 const llm = new LlmClient(config);
 const interviewService = new InterviewService(llm);
@@ -41,16 +58,27 @@ const worker = new JobWorker({
     orchestrator.recoverAnalysis(id, String(payload.turnId)),
   VERIFY: (id, payload) =>
     orchestrator.verifyClaims(id, payload.claimIds as string[]),
-  EVALUATE: async (id) => {
-    await orchestrator.prepareEvaluation(id);
-    await evaluationService.evaluateAndStore(id);
-  },
 });
+
+// EVALUATE never runs in-process: the relay publishes durable PG intents to
+// BullMQ and apps/evaluation-worker executes them.
+const evaluationQueue = new Queue(EVALUATION_QUEUE, {
+  connection: createRedisConnection(config.BULLMQ_REDIS_URL),
+});
+const evaluationRelay = new EvaluationRelay(evaluationQueue, (id) =>
+  orchestrator.prepareEvaluation(id),
+);
+
 setInterval(() => {
   void worker
     .tick()
     .catch((err: unknown) => console.error("job worker failed", err));
 }, 1000);
+setInterval(() => {
+  void evaluationRelay
+    .tick()
+    .catch((err: unknown) => console.error("evaluation relay failed", err));
+}, 2000);
 setInterval(() => {
   void evaluationService
     .finalizeExpired(config.RECONNECT_WINDOW_SECONDS)
@@ -88,11 +116,15 @@ app.get("/health", (c) => c.json({ ok: true }));
 app.route("/api/v1/auth", browserAuthRouter());
 app.use("/api/v1/interviews", browserOwnership);
 app.use("/api/v1/interviews/*", browserOwnership);
+app.use("/api/v1/system-design", browserOwnership);
+app.use("/api/v1/system-design/*", browserOwnership);
 
 app.route("/api/v1/interviews", createInterviewsRouter(interviewService));
 app.route("/api/v1/interviews", createSessionsRouter(sessionService));
 app.route("/api/v1/interviews", createCompletionRouter(evaluationService));
 app.route("/api/v1/interviews", createResultsRouter());
+app.route("/api/v1/interviews", createSystemDesignInterviewRouter());
+app.route("/api/v1/system-design", createSystemDesignCatalogRouter());
 app.route(
   "/internal",
   createInternalRouter(config, realtimeEvents, orchestrator, evaluationService),

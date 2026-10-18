@@ -81,7 +81,27 @@ export interface QuestionRecord {
   spokenAt?: string;
 }
 
+export type SystemDesignPhase =
+  | "DESIGN_PENDING"
+  | "DISCUSSION"
+  | "REVISION_REQUESTED"
+  | "REVISION_REVIEW"
+  | "FINISHED";
+
+export interface SystemDesignInterviewState {
+  problemId: string;
+  phase: SystemDesignPhase;
+  activeRevision: number;
+  activeSubmissionId?: string;
+  challengeIssued: boolean;
+  revisionSubmitted: boolean;
+  probesAsked: string[];
+  selectedProbeIds: string[];
+}
+
 export interface InterviewState {
+  mode?: "GITHUB" | "SYSTEM_DESIGN";
+  systemDesign?: SystemDesignInterviewState;
   phase: InterviewPhase;
   difficulty: InterviewDifficulty;
   objectives: InterviewObjective[];

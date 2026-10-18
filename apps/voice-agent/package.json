@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run src/main.ts",
-    "start": "bun run src/main.ts",
+    "dev": "bun run src/main.ts dev",
+    "start": "bun run src/main.ts start",
     "build": "tsc --noEmit",
     "check-types": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",

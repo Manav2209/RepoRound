@@ -7,6 +7,8 @@ import { domainEvent, withTrace } from "../observability/events.js";
 import { enqueue } from "../jobs/queue.js";
 import { newId } from "../lib/ids.js";
 import { readGithubContext } from "../github/context.js";
+import { getProblem } from "../system-design/problems.js";
+import type { ArchitectureSnapshot } from "@repo/voice-types";
 
 export class EvaluationService {
   private readonly evaluator: Evaluator;
@@ -135,21 +137,46 @@ export class EvaluationService {
       .filter((e) => candidateIds.has(e.sourceTurnId))
       .slice(-80);
     const context = readGithubContext(interview.knowledge?.facts);
+    const problem =
+      interview.mode === "SYSTEM_DESIGN" && interview.systemDesignProblemId
+        ? getProblem(interview.systemDesignProblemId)
+        : undefined;
+    const systemDesign =
+      interview.mode === "SYSTEM_DESIGN"
+        ? await this.buildSystemDesignContext(interviewId, problem, state)
+        : undefined;
     const result = turns.some((t) => t.role === "user" && t.text.trim())
       ? await withTrace(interviewId, "evaluation", () =>
           this.evaluator.evaluate({
-            projectContext: {
-              owner: interview.owner,
-              name: interview.name,
-              projectSummary: context?.projectSummary.slice(0, 2500) ?? "",
-              technologies: context?.technologies ?? [],
-              architecture: JSON.stringify(context?.architecture ?? {}).slice(
-                0,
-                2500,
-              ),
-              importantFiles: [],
-              evidence: [],
-            },
+            projectContext:
+              interview.mode === "SYSTEM_DESIGN"
+                ? {
+                    owner: "",
+                    name: problem?.title ?? "System Design",
+                    projectSummary: problem
+                      ? `${problem.brief}\n\nRequirements:\n${problem.visibleRequirements.join("\n")}`.slice(
+                          0,
+                          2500,
+                        )
+                      : "",
+                    technologies: [],
+                    architecture: "",
+                    importantFiles: [],
+                    evidence: [],
+                  }
+                : {
+                    owner: interview.owner ?? "",
+                    name: interview.name ?? "",
+                    projectSummary:
+                      context?.projectSummary.slice(0, 2500) ?? "",
+                    technologies: context?.technologies ?? [],
+                    architecture: JSON.stringify(
+                      context?.architecture ?? {},
+                    ).slice(0, 2500),
+                    importantFiles: [],
+                    evidence: [],
+                  },
+            ...(systemDesign ? { systemDesign } : {}),
             plan: {
               role: interview.interviewPlan?.role ?? "Software Engineer",
               difficulty: state.difficulty,
@@ -225,6 +252,57 @@ export class EvaluationService {
       });
     });
     return { status: "completed" };
+  }
+
+  private async buildSystemDesignContext(
+    interviewId: string,
+    problem: ReturnType<typeof getProblem>,
+    state: ReturnType<typeof stateSchema.parse>,
+  ): Promise<NonNullable<import("./evaluation.types.js").EvaluationContext["systemDesign"]>> {
+    const submissions = await prisma.systemDesignSubmission.findMany({
+      where: { interviewId, graphStatus: "READY" },
+      orderBy: { revision: "asc" },
+    });
+    const summarize = (row: (typeof submissions)[number]) => {
+      const snapshot = row.snapshot as unknown as ArchitectureSnapshot;
+      return {
+        nodes: snapshot.nodes.length,
+        edges: snapshot.edges.length,
+        components: snapshot.nodes.map((n) => n.data.label).slice(0, 75),
+      };
+    };
+    const revision1 = submissions.find((s) => s.revision === 1);
+    const revision2 = submissions.find((s) => s.revision === 2);
+    return {
+      problemTitle: problem?.title ?? "System design",
+      brief: problem?.brief ?? "",
+      requirements: problem?.visibleRequirements ?? [],
+      challenge: problem?.challenge.prompt ?? "",
+      probesAsked: state.systemDesign?.probesAsked ?? [],
+      challengeIssued: state.systemDesign?.challengeIssued ?? false,
+      revisionSubmitted: state.systemDesign?.revisionSubmitted ?? false,
+      revision1: revision1
+        ? summarize(revision1)
+        : { nodes: 0, edges: 0, components: [] },
+      ...(revision2 ? { revision2: summarize(revision2) } : {}),
+    };
+  }
+
+  /** Marks the durable PostgreSQL evaluation intent completed/failed. */
+  async settleIntent(
+    interviewId: string,
+    outcome: "completed" | "failed",
+    error?: string,
+  ): Promise<void> {
+    await prisma.interviewJob.updateMany({
+      where: { interviewId, kind: "EVALUATE" },
+      data: {
+        status: outcome,
+        error: error?.slice(0, 500) ?? null,
+        leaseToken: null,
+        leaseUntil: null,
+      },
+    });
   }
 
   async retry(interviewId: string): Promise<void> {

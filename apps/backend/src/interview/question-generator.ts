@@ -4,7 +4,8 @@ import type { LlmClient } from "../llm/llm.client.js";
 import { structured } from "../llm/llm.client.js";
 import { RepositoryKnowledge } from "../github/knowledge.js";
 import type { CodeExcerpt } from "../github/knowledge.js";
-import { withTrace } from "../observability/events.js";
+import { repoGraphProbe } from "../github/graph.js";
+import { emit, withTrace } from "../observability/events.js";
 import { policyFor } from "./policies.js";
 import { ToolRegistry } from "./tools.js";
 import type {
@@ -63,6 +64,23 @@ export class QuestionGenerator {
     } catch {
       /* continue from cached project context */
     }
+    const graphFacts: string[] = [];
+    try {
+      const startedAt = Date.now();
+      const probe = repoGraphProbe(knowledge, objective);
+      if (probe) {
+        graphFacts.push(probe.fact);
+        excerpts = [...probe.excerpts, ...excerpts].slice(0, 6);
+        void emit(interviewId, "repository.graph_probe", {
+          probeId: probe.probeId,
+          objectiveId: objective.id,
+          references: probe.excerpts.map((e) => e.reference),
+          durationMs: Date.now() - startedAt,
+        }).catch(() => {});
+      }
+    } catch {
+      /* graph evidence is best-effort and never blocks a question */
+    }
     let references: QuestionRecord["repositoryReferences"] = [];
     try {
       const generated = await withTrace(
@@ -91,6 +109,7 @@ export class QuestionGenerator {
                     knowledge.facts.projectSummary ?? "",
                   ).slice(0, 2500),
                   excerpts,
+                  graphFacts,
                   claims: state.claims.slice(-4),
                   evidence: state.evidence.slice(-4),
                   recentTurns: recentTurns

@@ -10,6 +10,7 @@ import {
 } from "../db/repositories/interview.repo.js";
 import { storeKnowledge } from "../github/knowledge.js";
 import { withTrace } from "../observability/events.js";
+import { getProblem } from "../system-design/problems.js";
 
 export class InterviewService {
   private readonly scraper = new GithubScraper();
@@ -53,6 +54,24 @@ export class InterviewService {
     return { id: interview.id, status: "analyzing" };
   }
 
+  async createSystemDesign(
+    problemId: string,
+    userId: string,
+  ): Promise<{ id: string; status: InterviewStatus }> {
+    const problem = getProblem(problemId);
+    if (!problem) throw new Error("Unknown system design problem");
+    const row = await prisma.interview.create({
+      data: {
+        id: newId("int"),
+        mode: "SYSTEM_DESIGN",
+        systemDesignProblemId: problem.id,
+        userId,
+        status: "created",
+      },
+    });
+    return { id: row.id, status: "created" };
+  }
+
   async getById(id: string): Promise<InterviewWithContext | null> {
     return interviewRepo.getWithContext(id);
   }
@@ -62,9 +81,11 @@ export class InterviewService {
       const interview = await interviewRepo.getById(id);
       if (!interview) throw new Error(`Interview ${id} not found`);
       if (interview.status !== "analyzing") return;
+      if (!interview.owner || !interview.name)
+        throw new Error("Interview is missing repository metadata");
 
       const scraped = await withTrace(id, "repository_retrieval", () =>
-        this.scraper.scrape(interview.owner, interview.name),
+        this.scraper.scrape(interview.owner!, interview.name!),
       );
       const context = await withTrace(id, "repository_analysis", () =>
         this.analyzer.analyze(scraped),

@@ -1,6 +1,10 @@
 import type {
+  ArchitectureSnapshot,
+  DesignSubmissionResult,
+  DesignView,
   InterviewResult,
   InterviewView,
+  ProblemSummary,
   SessionInfo,
 } from "../types/interview";
 
@@ -38,7 +42,12 @@ async function accessToken(): Promise<string> {
   return accessPromise;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  renewAccess = true,
+): Promise<T> {
+  const token = await accessToken();
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
     signal: init?.signal
@@ -46,10 +55,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       : AbortSignal.timeout(15000),
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${await accessToken()}`,
+      Authorization: `Bearer ${token}`,
       ...(init?.headers ?? {}),
     },
   });
+
+  if (res.status === 401 && renewAccess) {
+    // Local databases can be replaced while browsers retain their old token.
+    // Only discard the rejected token; another request may have renewed it.
+    if (localStorage.getItem("interview-access") === token)
+      localStorage.removeItem("interview-access");
+    await res.body?.cancel();
+    return request<T>(path, init, false);
+  }
 
   let body: unknown;
   try {
@@ -86,6 +104,50 @@ export function getInterview(
   return request<InterviewView>(`/api/v1/interviews/${interviewId}`, {
     signal,
   });
+}
+
+export function getSystemDesignProblems(): Promise<{
+  problems: ProblemSummary[];
+}> {
+  return request<{ problems: ProblemSummary[] }>(
+    "/api/v1/system-design/problems",
+  );
+}
+
+export function createSystemDesignInterview(
+  problemId: string,
+): Promise<InterviewView> {
+  return request<InterviewView>("/api/v1/interviews", {
+    method: "POST",
+    body: JSON.stringify({ mode: "SYSTEM_DESIGN", problemId }),
+  });
+}
+
+export function getDesign(
+  interviewId: string,
+  signal?: AbortSignal,
+): Promise<DesignView> {
+  return request<DesignView>(`/api/v1/interviews/${interviewId}/design`, {
+    signal,
+  });
+}
+
+export function submitArchitecture(
+  interviewId: string,
+  input: {
+    requestId: string;
+    expectedRevision: number;
+    snapshot: ArchitectureSnapshot;
+  },
+): Promise<DesignSubmissionResult> {
+  return request<DesignSubmissionResult>(
+    `/api/v1/interviews/${interviewId}/design/submissions`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(30000),
+    },
+  );
 }
 
 const inFlightSessions = new Map<string, Promise<SessionInfo>>();

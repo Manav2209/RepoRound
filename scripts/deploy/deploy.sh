@@ -17,7 +17,7 @@ app_dir=$(realpath "$app_dir")
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 for tool in docker curl flock; do command -v "$tool" >/dev/null || die "$tool is required."; done
 [[ $(docker info --format '{{.Architecture}}') =~ ^(x86_64|amd64)$ ]] || die "The images require an amd64 Docker host."
-for file in backend.env voice-agent.env; do
+for file in backend.env voice-agent.env evaluation-worker.env; do
   [[ -f $app_dir/$file ]] || die "Create $app_dir/$file first."
   chmod 600 "$app_dir/$file"
 done
@@ -32,7 +32,7 @@ mutating=false
 success=false
 config_existed=false
 network=ai-interview
-apps=(backend web voice-agent)
+apps=(backend web voice-agent evaluation-worker)
 declare -A image=()
 log_options=(--log-driver local --log-opt max-size=10m --log-opt max-file=2)
 
@@ -47,7 +47,7 @@ cleanup() {
     else
       rm -f "$app_dir/caddy/Caddyfile"
     fi
-    for name in backend web voice-agent caddy; do
+    for name in backend web voice-agent evaluation-worker caddy; do
       if [[ -n ${previous[$name]:-} ]]; then
         docker rename "${previous[$name]}" "$name" || true
         docker start "$name" >/dev/null || true
@@ -76,6 +76,7 @@ docker run --rm --network none --user 0:0 --entrypoint bun \
   -v "$script_dir/prepare-env.mjs:/app/scripts/deploy/prepare-env.mjs:ro" \
   -v "$app_dir/backend.env:/run/backend.input:ro" \
   -v "$app_dir/voice-agent.env:/run/voice.input:ro" \
+  -v "$app_dir/evaluation-worker.env:/run/worker.input:ro" \
   -v "$runtime_dir:/run/output" \
   "${image[backend]}" /app/scripts/deploy/prepare-env.mjs
 
@@ -100,6 +101,8 @@ docker run --rm --env-file "$runtime_dir/backend.env" --entrypoint bun \
   '
 docker run --rm --network none --env-file "$runtime_dir/voice-agent.env" --entrypoint bun \
   "${image[voice-agent]}" -e 'import { loadConfig } from "@repo/providers"; loadConfig(); console.log("Voice configuration passed.");'
+docker run --rm --network none --env-file "$runtime_dir/evaluation-worker.env" --entrypoint bun \
+  "${image[evaluation-worker]}" -e 'import { loadWorkerConfig } from "@repo/backend/evaluation"; loadWorkerConfig(); console.log("Evaluation worker configuration passed.");'
 
 # NEXT_PUBLIC_* values cannot be corrected at container startup.
 docker run --rm --network none --entrypoint node -e "EXPECTED_ORIGIN=$origin" \
@@ -147,6 +150,9 @@ retire() {
     echo "Stopping $name."
     if [[ $name == voice-agent ]]; then
       docker stop --time 3900 "$name" >/dev/null
+    elif [[ $name == evaluation-worker ]]; then
+      # Let an in-flight evaluation finish before the container is replaced.
+      docker stop --time 300 "$name" >/dev/null
     else
       docker stop --time 30 "$name" >/dev/null
     fi
@@ -170,6 +176,7 @@ wait_healthy() {
 mutating=true
 # Drain while the original backend is still available to active interviews.
 retire voice-agent
+retire evaluation-worker
 retire backend
 retire web
 retire caddy
@@ -181,6 +188,12 @@ docker run -d --name backend --network "$network" --network-alias backend \
   --restart unless-stopped "${log_options[@]}" \
   --env-file "$runtime_dir/backend.env" "${image[backend]}" >/dev/null
 wait_healthy backend 120
+created+=(evaluation-worker)
+docker run -d --name evaluation-worker --network "$network" \
+  --restart unless-stopped --stop-timeout 300 "${log_options[@]}" \
+  --env-file "$runtime_dir/evaluation-worker.env" \
+  "${image[evaluation-worker]}" >/dev/null
+wait_healthy evaluation-worker 60
 created+=(web)
 docker run -d --name web --network "$network" --network-alias web \
   --restart unless-stopped "${log_options[@]}" "${image[web]}" >/dev/null

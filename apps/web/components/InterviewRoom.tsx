@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useInterviewSession } from "../hooks/useInterviewSession";
 import ConnectionStatus from "./ConnectionStatus";
 import Transcript from "./Transcript";
 import MicrophoneButton from "./MicrophoneButton";
+import RevisionPanel from "./system-design/RevisionPanel";
 
 export default function InterviewRoom({
   interviewId,
@@ -19,10 +21,13 @@ export default function InterviewRoom({
     isMuted,
     isAISpeaking,
     agentState,
+    agentReady,
+    readyTimedOut,
     mute,
     unmute,
     endInterview,
     reconnect,
+    retry,
   } = useInterviewSession(interviewId);
 
   const [ending, setEnding] = useState(false);
@@ -40,6 +45,49 @@ export default function InterviewRoom({
         "Unable to end the interview. Check your connection and try again.",
       );
     }
+  }
+
+  if (!agentReady) {
+    const disconnected = status === "disconnected";
+    const unavailable = readyTimedOut || status === "failed" || disconnected;
+    return (
+      <div className="interview-room">
+        <Link href="/" className="back-link">
+          ← Back to home
+        </Link>
+        {unavailable ? (
+          <>
+            <p className="eyebrow">Interviewer unavailable</p>
+            <h1>The interviewer isn’t available right now.</h1>
+            <p className="subtitle">
+              The connection to your interviewer is unavailable. Reconnect to
+              resume your session.
+            </p>
+            <div className="preparation-actions">
+              <button type="button" onClick={retry}>
+                {disconnected ? "Reconnect" : "Try again"}
+              </button>
+              <Link href="/" className="secondary">
+                Back to home
+              </Link>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="eyebrow">Live interview</p>
+            <h1>Connecting you to your interviewer…</h1>
+            <p className="subtitle">
+              Please wait a moment. The interview starts as soon as your
+              interviewer joins the room.
+            </p>
+            <p className="hint">
+              <span className="loader" aria-hidden="true" /> Waiting for the
+              interviewer to join
+            </p>
+          </>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -84,6 +132,7 @@ export default function InterviewRoom({
           ))}
         </div>
       </section>
+      <RevisionPanel interviewId={interviewId} />
       <section>
         <div className="transcript-heading">
           <h2>Conversation</h2>

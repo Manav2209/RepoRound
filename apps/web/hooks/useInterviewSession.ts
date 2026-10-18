@@ -18,19 +18,25 @@ export interface UseInterviewSessionResult {
   isMuted: boolean;
   isAISpeaking: boolean;
   agentState: AgentSpeakingState;
+  agentReady: boolean;
+  readyTimedOut: boolean;
   mute: () => Promise<void>;
   unmute: () => Promise<void>;
   endInterview: () => Promise<void>;
   reconnect: () => void;
+  retry: () => void;
 }
+
+const AGENT_READY_TIMEOUT_MS = 30_000;
 
 export function useInterviewSession(
   interviewId: string,
 ): UseInterviewSessionResult {
-  const [status, setStatus] = useState<ConnectionStatus>("disconnected");
+  const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [agentState, setAgentState] = useState<AgentSpeakingState>("unknown");
+  const [readyTimedOut, setReadyTimedOut] = useState(false);
   const sessionRef = useRef<InterviewSession | null>(null);
   const transcriptRef = useRef<TranscriptMessage[]>([]);
   const router = useRouter();
@@ -98,7 +104,11 @@ export function useInterviewSession(
               if (!cancelled) setTranscript(next);
             },
             onConnectionChange: (s) => {
-              if (!cancelled) setStatus(s as ConnectionStatus);
+              if (cancelled) return;
+              setStatus(s as ConnectionStatus);
+              if (s === "disconnected") {
+                setAgentState("unknown");
+              }
             },
             onAgentState: (s) => {
               if (!cancelled) setAgentState(s);
@@ -124,6 +134,16 @@ export function useInterviewSession(
     };
   }, [interviewId, router, revision]);
 
+  useEffect(() => {
+    if (readyTimedOut || agentState !== "unknown") return;
+    if (status !== "connecting" && status !== "connected") return;
+    const timer = setTimeout(() => {
+      setReadyTimedOut(true);
+      void sessionRef.current?.disconnect().catch(() => {});
+    }, AGENT_READY_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [readyTimedOut, agentState, status]);
+
   const isAISpeaking = agentState === "speaking";
 
   return {
@@ -132,7 +152,14 @@ export function useInterviewSession(
     isMuted,
     isAISpeaking,
     agentState,
+    agentReady: status === "connected" && agentState !== "unknown",
+    readyTimedOut,
     reconnect: () => setRevision((n) => n + 1),
+    retry: () => {
+      setReadyTimedOut(false);
+      setAgentState("unknown");
+      setRevision((n) => n + 1);
+    },
     mute: async () => {
       await sessionRef.current?.mute();
       setIsMuted(true);

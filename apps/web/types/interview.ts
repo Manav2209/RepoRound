@@ -59,10 +59,66 @@ export interface InterviewResult {
   };
 }
 
+export type InterviewMode = "GITHUB" | "SYSTEM_DESIGN";
+
 export interface InterviewView {
   interviewId: string;
   status: InterviewStatus;
+  mode?: InterviewMode;
   githubUrl?: string;
+  problemId?: string;
   error?: string;
-  preparationStage?: "analyzing" | "planning" | "ready";
+  preparationStage?: "analyzing" | "planning" | "ready" | "designing";
+}
+
+export type ComponentKind =
+  | "client"
+  | "load_balancer"
+  | "api_service"
+  | "database"
+  | "cache"
+  | "message_queue"
+  | "worker"
+  | "object_storage"
+  | "external_service"
+  | "cdn";
+
+export interface ArchitectureSnapshot {
+  schemaVersion: 1;
+  nodes: Array<{
+    id: string;
+    position: { x: number; y: number };
+    data: { componentType: ComponentKind; label: string };
+  }>;
+  edges: Array<{ id: string; source: string; target: string }>;
+}
+
+export interface ProblemSummary {
+  id: string;
+  title: string;
+  difficulty: "EASY" | "MEDIUM" | "HARD";
+  brief: string;
+  visibleRequirements: string[];
+}
+
+export interface DesignView {
+  interviewId: string;
+  mode: "SYSTEM_DESIGN";
+  problem: ProblemSummary | null;
+  activeRevision: number;
+  revisionAllowed: boolean;
+  submission: {
+    submissionId: string;
+    revision: number;
+    graphStatus: "BUILDING" | "READY" | "FAILED";
+    snapshot: ArchitectureSnapshot;
+    createdAt: string;
+  } | null;
+}
+
+export interface DesignSubmissionResult {
+  submissionId: string;
+  revision: number;
+  graphStatus: "BUILDING" | "READY" | "FAILED";
+  next: "START_INTERVIEW" | "RESUME_INTERVIEW";
 }

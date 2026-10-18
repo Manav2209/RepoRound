@@ -27,7 +27,7 @@ function requireUrl(value, key, protocols) {
   return url;
 }
 
-export function prepareEnv(backendText, voiceText, publicOrigin) {
+export function prepareEnv(backendText, voiceText, publicOrigin, workerText) {
   const origin = requireUrl(publicOrigin, "PUBLIC_ORIGIN", ["https:"]);
   if (origin.origin !== publicOrigin || origin.username || origin.password) {
     throw new Error(
@@ -36,6 +36,7 @@ export function prepareEnv(backendText, voiceText, publicOrigin) {
   }
   const backend = parse(backendText);
   const voice = parse(voiceText);
+  const worker = workerText === undefined ? null : parse(workerText);
   const shared = [
     "LIVEKIT_URL",
     "LIVEKIT_API_KEY",
@@ -86,6 +87,40 @@ export function prepareEnv(backendText, voiceText, publicOrigin) {
   } else {
     for (const key of tracing) delete backend[key];
   }
+  if (worker) {
+    const workerShared = [
+      "DATABASE_URL",
+      "AI_ROUTER_BASE_URL",
+      "AI_ROUTER_API_KEY",
+      "AI_ROUTER_MODEL",
+      "BULLMQ_REDIS_URL",
+    ];
+    requireValues(worker, workerShared, "evaluation-worker.env");
+    // The worker and the backend must agree on the database, model router, and
+    // the Redis instance carrying the evaluation queue.
+    for (const key of [
+      "DATABASE_URL",
+      "AI_ROUTER_BASE_URL",
+      "AI_ROUTER_API_KEY",
+      "AI_ROUTER_MODEL",
+      "BULLMQ_REDIS_URL",
+    ]) {
+      if (worker[key] !== backend[key])
+        throw new Error(
+          `${key} must match between the backend and evaluation worker env files`,
+        );
+    }
+    requireUrl(worker.BULLMQ_REDIS_URL, "BULLMQ_REDIS_URL", [
+      "redis:",
+      "rediss:",
+    ]);
+    for (const key of tracing) {
+      if (backend[key] !== undefined) worker[key] = backend[key];
+      else delete worker[key];
+    }
+    worker.EVALUATION_WORKER_CONCURRENCY =
+      worker.EVALUATION_WORKER_CONCURRENCY?.trim() || "1";
+  }
   backend.PORT = "8080";
   backend.CORS_ALLOWED_ORIGINS = publicOrigin;
   voice.BACKEND_BASE_URL = "http://backend:8080";
@@ -100,7 +135,11 @@ export function prepareEnv(backendText, voiceText, publicOrigin) {
         return `${key}=${value}`;
       })
       .join("\n") + "\n";
-  return { backend: serialize(backend), voice: serialize(voice) };
+  return {
+    backend: serialize(backend),
+    voice: serialize(voice),
+    worker: worker ? serialize(worker) : "",
+  };
 }
 
 if (
@@ -112,9 +151,13 @@ if (
       readFileSync("/run/backend.input", "utf8"),
       readFileSync("/run/voice.input", "utf8"),
       process.env.PUBLIC_ORIGIN,
+      readFileSync("/run/worker.input", "utf8"),
     );
     writeFileSync("/run/output/backend.env", env.backend, { mode: 0o600 });
     writeFileSync("/run/output/voice-agent.env", env.voice, { mode: 0o600 });
+    writeFileSync("/run/output/evaluation-worker.env", env.worker, {
+      mode: 0o600,
+    });
     console.log(
       "Runtime env files parsed and validated; secret values withheld.",
     );

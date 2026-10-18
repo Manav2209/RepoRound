@@ -52,6 +52,17 @@ export interface EvaluationContext {
     text: string;
     questionId?: string | null;
   }[];
+  systemDesign?: {
+    problemTitle: string;
+    brief: string;
+    requirements: string[];
+    challenge: string;
+    probesAsked: string[];
+    challengeIssued: boolean;
+    revisionSubmitted: boolean;
+    revision1: { nodes: number; edges: number; components: string[] };
+    revision2?: { nodes: number; edges: number; components: string[] };
+  };
   candidateEvidence: import("../interview/interview.types.js").CandidateEvidence[];
   claims?: import("../interview/interview.types.js").CandidateClaim[];
   skills?: Record<string, import("../interview/interview.types.js").SkillState>;

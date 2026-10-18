@@ -95,13 +95,20 @@ export async function structured<S extends z.ZodTypeAny>(
   let error: unknown;
   let feedback: LlmMessage[] = [];
   for (let attempt = 0; attempt < (options.attempts ?? 2); attempt++) {
+    let raw: unknown;
     try {
-      return schema.parse(
-        await llm.completeJson<unknown>([...messages, ...feedback], options),
-      );
+      raw = await llm.completeJson<unknown>([...messages, ...feedback], options);
+      return schema.parse(raw);
     } catch (err) {
       error = err;
       if (err instanceof z.ZodError) {
+        const shape =
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? Object.keys(raw as Record<string, unknown>).join(",")
+            : Array.isArray(raw)
+              ? "array"
+              : typeof raw;
+        console.error(`[llm] structured output keys: ${shape}`);
         const issues = err.issues
           .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
           .join("; ")

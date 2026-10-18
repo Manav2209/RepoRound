@@ -27,22 +27,55 @@ const envSchema = z.object({
   LANGFUSE_BASE_URL: z.string().url().optional(),
   LANGFUSE_PUBLIC_KEY: z.string().optional(),
   LANGFUSE_SECRET_KEY: z.string().optional(),
+  FALKORDB_HOST: z.string().min(1).default("localhost"),
+  FALKORDB_PORT: z.coerce.number().int().positive().default(6379),
+  FALKORDB_GRAPH: z.string().min(1).default("ai_interviewer"),
+  BULLMQ_REDIS_URL: z.string().url().default("redis://localhost:6380"),
+  EVALUATION_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(1),
+});
+
+/**
+ * The evaluation worker only needs the database, model router, and queue
+ * settings, so it must not be forced to supply LiveKit or CORS credentials.
+ */
+const workerEnvSchema = envSchema.pick({
+  DATABASE_URL: true,
+  AI_ROUTER_BASE_URL: true,
+  AI_ROUTER_API_KEY: true,
+  AI_ROUTER_MODEL: true,
+  LLM_TEMPERATURE: true,
+  BULLMQ_REDIS_URL: true,
+  EVALUATION_WORKER_CONCURRENCY: true,
 });
 
 export type BackendConfig = z.infer<typeof envSchema>;
+export type WorkerConfig = z.infer<typeof workerEnvSchema>;
 
-export function loadConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): BackendConfig {
-  const parsed = envSchema.safeParse(env);
+function parseEnv<S extends z.ZodTypeAny>(
+  schema: S,
+  env: NodeJS.ProcessEnv,
+): z.infer<S> {
+  const parsed = schema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `${i.path.join(".")}: ${i.message}`)
       .join(", ");
     throw new Error(
-      `Missing or invalid backend environment variables (${issues}). ` +
-        `Copy apps/backend/.env.example to apps/backend/.env and fill in the values.`,
+      `Missing or invalid environment variables (${issues}). ` +
+        `Copy the app's .env.example to .env and fill in the values.`,
     );
   }
   return parsed.data;
+}
+
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): BackendConfig {
+  return parseEnv(envSchema, env);
+}
+
+export function loadWorkerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): WorkerConfig {
+  return parseEnv(workerEnvSchema, env);
 }

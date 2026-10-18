@@ -5,7 +5,8 @@ import type { TranscriptMessage } from "../types/interview";
 const TOPIC_TRANSCRIPTION = "lk.transcription";
 const ATTRIBUTE_AGENT_STATE = "lk.agent.state";
 
-export type AgentSpeakingState = "listening" | "thinking" | "speaking" | "unknown";
+export type AgentSpeakingState =
+  "listening" | "thinking" | "speaking" | "unknown";
 
 export interface LivekitCallbacks {
   onTranscript: (msg: TranscriptMessage) => void;
@@ -21,7 +22,9 @@ export interface InterviewSession {
   isConnected(): boolean;
 }
 
-function agentStateOf(p: { attributes?: Readonly<Record<string, string>> } | null | undefined): AgentSpeakingState | null {
+function agentStateOf(
+  p: { attributes?: Readonly<Record<string, string>> } | null | undefined,
+): AgentSpeakingState | null {
   const attrs = p?.attributes;
   if (!attrs) return null;
   const state = attrs[ATTRIBUTE_AGENT_STATE];
@@ -71,7 +74,8 @@ export function createInterviewSession(
       const localIdentity = room.localParticipant?.identity ?? "";
 
       for (const segment of transcription.segments) {
-        const isUser = transcription.transcribedParticipantIdentity.startsWith("candidate");
+        const isUser =
+          transcription.transcribedParticipantIdentity.startsWith("candidate");
         callbacks.onTranscript({
           id: segment.id,
           role: isUser ? "user" : "assistant",
@@ -108,26 +112,38 @@ export function createInterviewSession(
     track.detach();
   });
 
-  room.on(RoomEvent.Disconnected, () => callbacks.onConnectionChange("disconnected"));
-  room.on(RoomEvent.Reconnecting, () => callbacks.onConnectionChange("reconnecting"));
-  room.on(RoomEvent.Reconnected, () => callbacks.onConnectionChange("connected"));
+  room.on(RoomEvent.Disconnected, () =>
+    callbacks.onConnectionChange("disconnected"),
+  );
+  room.on(RoomEvent.Reconnecting, () =>
+    callbacks.onConnectionChange("reconnecting"),
+  );
+  room.on(RoomEvent.Reconnected, () =>
+    callbacks.onConnectionChange("connected"),
+  );
 
-  room.on(RoomEvent.ParticipantAttributesChanged, (p) => {
-    const state = agentStateOf(p);
+  room.on(RoomEvent.ParticipantAttributesChanged, (_changed, participant) => {
+    if (!participant.isAgent) return;
+    const state = agentStateOf(participant);
     if (state) {
       callbacks.onAgentState(state);
     }
   });
 
-  room.on(RoomEvent.ParticipantConnected, (p) => {
+  function reportAgent(p: {
+    attributes?: Readonly<Record<string, string>>;
+    isAgent?: boolean;
+  }): void {
     const state = agentStateOf(p);
-    if (state) {
-      callbacks.onAgentState(state);
-    }
-  });
+    if (state) callbacks.onAgentState(state);
+    else if (p.isAgent) callbacks.onAgentState("listening");
+  }
+
+  room.on(RoomEvent.ParticipantConnected, (p) => reportAgent(p));
 
   async function connect(): Promise<void> {
     await room.connect(url, token);
+    for (const p of room.remoteParticipants.values()) reportAgent(p);
     await room.startAudio();
     await startMicrophone();
     callbacks.onConnectionChange("connected");

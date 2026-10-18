@@ -1,10 +1,16 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { InterviewService } from "../interview/interview.service.js";
+import { getProblem } from "../system-design/problems.js";
+import { getActiveSubmission } from "../system-design/submissions.js";
 
-const createInterviewSchema = z.object({
-  githubUrl: z.string().min(1).max(2048),
-});
+const createInterviewSchema = z.union([
+  z.object({ githubUrl: z.string().min(1).max(2048) }),
+  z.object({
+    mode: z.literal("SYSTEM_DESIGN"),
+    problemId: z.string().min(1).max(100),
+  }),
+]);
 
 export function createInterviewsRouter(service: InterviewService): Hono {
   const app = new Hono();
@@ -20,11 +26,20 @@ export function createInterviewsRouter(service: InterviewService): Hono {
     }
 
     try {
-      const { id, status } = await service.create(
-        parsed.data.githubUrl,
+      if ("githubUrl" in parsed.data) {
+        const { id, status } = await service.create(
+          parsed.data.githubUrl,
+          c.get("userId"),
+        );
+        return c.json({ interviewId: id, mode: "GITHUB", status }, 201);
+      }
+      if (!getProblem(parsed.data.problemId))
+        return c.json({ error: "Unknown system design problem" }, 400);
+      const { id, status } = await service.createSystemDesign(
+        parsed.data.problemId,
         c.get("userId"),
       );
-      return c.json({ interviewId: id, status }, 201);
+      return c.json({ interviewId: id, mode: "SYSTEM_DESIGN", status }, 201);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 400);
@@ -37,8 +52,21 @@ export function createInterviewsRouter(service: InterviewService): Hono {
     if (!interview) {
       return c.json({ error: "Interview not found" }, 404);
     }
+    if (interview.mode === "SYSTEM_DESIGN") {
+      const active = await getActiveSubmission(interview.id);
+      return c.json({
+        interviewId: interview.id,
+        mode: "SYSTEM_DESIGN",
+        status: interview.status,
+        problemId: interview.systemDesignProblemId,
+        error: interview.error ?? undefined,
+        createdAt: interview.createdAt,
+        preparationStage: active ? "ready" : "designing",
+      });
+    }
     return c.json({
       interviewId: interview.id,
+      mode: "GITHUB",
       status: interview.status,
       githubUrl: interview.githubUrl,
       error: interview.error ?? undefined,
