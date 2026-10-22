@@ -6,14 +6,14 @@ import { domainEvent, emit, withTrace } from "../observability/events.js";
 import { enqueue, JobDeferred } from "../jobs/queue.js";
 import { AnswerAnalyzer } from "./answer-analyzer.js";
 import { QuestionGenerator } from "./question-generator.js";
-import { objectiveSchema, stateSchema } from "./schemas.js";
+import { prepareGithubObjectives, stateSchema } from "./schemas.js";
 import { withInterviewLock } from "./runtime-lock.js";
+import { PHASES, transition } from "./policies.js";
 import {
-  PHASES,
-  selectNextAction,
-  selectObjective,
-  transition,
-} from "./policies.js";
+  createGithubState,
+  recordGithubQuestion,
+  selectGithubAction,
+} from "./github-policy.js";
 import type {
   InterviewDifficulty,
   InterviewObjective,
@@ -72,6 +72,7 @@ export class InterviewOrchestrator {
   constructor(
     private readonly llm: LlmClient,
     private readonly durationMinutes = 30,
+    private readonly githubDurationMinutes = 15,
   ) {
     this.analyzer = new AnswerAnalyzer(llm);
     this.generator = new QuestionGenerator(llm);
@@ -158,24 +159,14 @@ export class InterviewOrchestrator {
     )
       throw new Error("Interview is not active or prepared");
     if (sessionId) await this.validateSession(interviewId, sessionId);
-    const plan = objectiveSchema
-      .array()
-      .min(1)
-      .parse(interview.interviewPlan.objectives);
+    const plan = prepareGithubObjectives(interview.interviewPlan.objectives);
     const initial: InterviewState = {
+      mode: "GITHUB",
+      github: createGithubState(plan, this.githubDurationMinutes),
       phase: "INTRO",
       difficulty:
-        interview.interviewPlan.difficulty === "junior"
-          ? "EASY"
-          : interview.interviewPlan.difficulty === "senior"
-            ? "HARD"
-            : "MEDIUM",
-      objectives: plan.map((o) => ({
-        ...o,
-        status: "NOT_STARTED",
-        evidenceIds: [],
-        attempts: 0,
-      })),
+        interview.interviewPlan.difficulty === "senior" ? "HARD" : "MEDIUM",
+      objectives: plan,
       claims: [],
       evidence: [],
       questions: [],
@@ -190,7 +181,9 @@ export class InterviewOrchestrator {
       create: {
         interviewId,
         data: initial as unknown as Prisma.InputJsonValue,
-        deadlineAt: new Date(Date.now() + this.durationMinutes * 60_000),
+        deadlineAt: new Date(
+          Date.now() + this.githubDurationMinutes * 60_000,
+        ),
       },
       update: {},
     });
@@ -208,23 +201,45 @@ export class InterviewOrchestrator {
       }
       if (state.questions.length || state.ended)
         return this.response(state, state.questions.at(-1)?.id, row.deadlineAt);
-      const objective = selectObjective(state);
+      const remainingMinutes = Math.max(
+        0,
+        Math.floor((row.deadlineAt.getTime() - Date.now()) / 60_000),
+      );
+      const action = selectGithubAction(state, remainingMinutes);
+      if (action.type === "END_INTERVIEW") {
+        state.ended = true;
+        state.endReason = "objectives_completed";
+        transition(state, "FINAL");
+        await this.save(interviewId, token, row.version, state, [
+          domainEvent(interviewId, "interview.ended", {
+            reason: state.endReason,
+          }),
+        ]);
+        return { ended: true };
+      }
+      const objective = state.objectives.find(
+        (item) => item.id === action.objectiveId,
+      );
       if (!objective) throw new Error("No interview objectives");
       const knowledge = await RepositoryKnowledge.load(interviewId);
       const question = await this.generator.generate(
         interviewId,
         state,
         objective,
-        { type: "ASK_NEW_TOPIC", objectiveId: objective.id },
+        action,
         knowledge,
         [],
-        this.durationMinutes,
+        remainingMinutes,
       );
       transition(state, objective.phase);
       objective.status = "IN_PROGRESS";
       state.questions.push(question);
+      recordGithubQuestion(state, objective, false);
       await this.save(interviewId, token, row.version, state, [
-        domainEvent(interviewId, "interview.started", { phase: state.phase }),
+        domainEvent(interviewId, "interview.started", {
+          phase: state.phase,
+          mode: "GITHUB",
+        }),
         domainEvent(interviewId, "objective.started", {
           objectiveId: objective.id,
         }),
@@ -232,6 +247,7 @@ export class InterviewOrchestrator {
           questionId: question.id,
           objectiveId: objective.id,
           phase: state.phase,
+          kind: question.kind,
         }),
       ]);
       return this.response(state, question.id, row.deadlineAt);
@@ -418,7 +434,8 @@ export class InterviewOrchestrator {
             : analysis.evidence.some((e) => e.strength === "WEAK")
               ? "WEAK"
               : undefined;
-          const difficulty = adaptDifficulty(state.difficulty, strength);
+          const adapted = adaptDifficulty(state.difficulty, strength);
+          const difficulty = adapted === "EASY" ? "MEDIUM" : adapted;
           if (difficulty !== state.difficulty)
             events.push(
               domainEvent(input.interviewId, "difficulty.changed", {
@@ -436,9 +453,9 @@ export class InterviewOrchestrator {
           );
         }
         if (
-          (objective.attempts >= 3 ||
+          (objective.attempts >= 2 ||
             state.questions.filter((q) => q.objectiveId === objective.id)
-              .length >= 3) &&
+              .length >= 2) &&
           objective.status !== "SATISFIED"
         )
           objective.status = "INSUFFICIENT";
@@ -468,7 +485,11 @@ export class InterviewOrchestrator {
           0,
           (row.deadlineAt.getTime() - Date.now()) / 60_000,
         );
-        const action = selectNextAction(state, remaining, failedAnalysis);
+        const action = selectGithubAction(
+          state,
+          Math.floor(remaining),
+          failedAnalysis,
+        );
         events.push(
           domainEvent(input.interviewId, "next_action.selected", {
             action: action.type,
@@ -518,8 +539,12 @@ export class InterviewOrchestrator {
             const claim = state.claims.find((c) => c.id === action.claimId);
             if (claim) claim.probed = true;
           }
+          const isFollowUp =
+            state.questions.at(-1)?.objectiveId === next.id &&
+            action.type !== "ASK_NEW_TOPIC";
           next.status = "IN_PROGRESS";
           state.questions.push({ ...question, sourceTurnId: input.turnId });
+          recordGithubQuestion(state, next, isFollowUp);
           state.processedTurns[input.turnId] = question.id;
           events.push(
             domainEvent(input.interviewId, "interviewer.question", {
@@ -527,6 +552,7 @@ export class InterviewOrchestrator {
               objectiveId: next.id,
               phase: state.phase,
               action: action.type,
+              kind: question.kind,
             }),
           );
         }

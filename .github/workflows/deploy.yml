@@ -35,7 +35,7 @@ jobs:
     environment: production
     env:
       IMAGE_SHA: ${{ inputs.commit_sha || github.event.workflow_run.head_sha }}
-      PUBLIC_ORIGIN: ${{ vars.NEXT_PUBLIC_BACKEND_URL }}
+      PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN || vars.NEXT_PUBLIC_BACKEND_URL }}
       EC2_HOST: ${{ vars.EC2_HOST }}
       EC2_USER: ${{ vars.EC2_USER || 'ubuntu' }}
       APP_DIR: ${{ vars.EC2_APP_DIR || '/home/ubuntu/ai-interview' }}
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$IMAGE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Provide a full lowercase commit SHA."; exit 1; }
-          [[ "$PUBLIC_ORIGIN" =~ ^https://[a-zA-Z0-9.-]+$ ]] || { echo "::error::Set NEXT_PUBLIC_BACKEND_URL to your HTTPS origin."; exit 1; }
+          [[ "$PUBLIC_ORIGIN" =~ ^https://[a-zA-Z0-9.-]+$ ]] || { echo "::error::Set PUBLIC_ORIGIN to your HTTPS origin."; exit 1; }
           [[ "$EC2_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "::error::Set valid EC2_HOST and EC2_USER variables."; exit 1; }
           [[ "$APP_DIR" =~ ^/[a-zA-Z0-9_./-]+$ && "$APP_DIR" != *..* ]] || { echo "::error::Invalid EC2_APP_DIR."; exit 1; }
           [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo "::error::Invalid Docker Hub namespace."; exit 1; }

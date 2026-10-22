@@ -41,7 +41,7 @@ export default function DesignSubmission({
         if (cancelled || controller.signal.aborted) return;
         setError(
           err instanceof ApiError && (err.status === 401 || err.status === 404)
-            ? "This interview is not available in this browser."
+            ? "This interview is not available on your account."
             : "We couldn't load the design problem. Please retry.",
         );
       } finally {

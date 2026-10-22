@@ -25,7 +25,9 @@ export class SessionService {
       Partial<
         Pick<
           BackendConfig,
-          "RECONNECT_WINDOW_SECONDS" | "INTERVIEW_DURATION_MINUTES"
+          | "RECONNECT_WINDOW_SECONDS"
+          | "INTERVIEW_DURATION_MINUTES"
+          | "GITHUB_INTERVIEW_DURATION_MINUTES"
         >
       >,
     private readonly agentName = "ai-interviewer",
@@ -123,14 +125,19 @@ export class SessionService {
             : initialState(
                 interview.interviewPlan?.objectives,
                 interview.interviewPlan?.difficulty ?? "mid",
+                {
+                  githubDurationMinutes:
+                    this.cfg.GITHUB_INTERVIEW_DURATION_MINUTES ?? 15,
+                },
               );
+        const durationMinutes =
+          interview.mode === "SYSTEM_DESIGN"
+            ? (this.cfg.INTERVIEW_DURATION_MINUTES ?? 30)
+            : (this.cfg.GITHUB_INTERVIEW_DURATION_MINUTES ?? 15);
         await tx.interviewRuntime.create({
           data: {
             interviewId,
-            deadlineAt: new Date(
-              now.getTime() +
-                (this.cfg.INTERVIEW_DURATION_MINUTES ?? 30) * 60_000,
-            ),
+            deadlineAt: new Date(now.getTime() + durationMinutes * 60_000),
             data: initialData as unknown as Prisma.InputJsonValue,
           },
         });

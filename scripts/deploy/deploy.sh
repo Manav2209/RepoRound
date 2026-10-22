@@ -90,8 +90,8 @@ docker run --rm --env-file "$runtime_dir/backend.env" --entrypoint bun \
       loadConfig();
       db = new PrismaClient({ log: [] });
       await Promise.all([
-        db.rateLimitBucket.count(), db.browserUser.count(),
-        db.browserAccessSession.count(), db.interviewJob.count(),
+        db.user.count(), db.session.count(), db.account.count(),
+        db.rateLimitBucket.count(), db.interviewJob.count(),
       ]);
       console.log("Backend configuration and database preflight passed.");
     } catch (error) {
@@ -104,22 +104,6 @@ docker run --rm --network none --env-file "$runtime_dir/voice-agent.env" --entry
 docker run --rm --network none --env-file "$runtime_dir/evaluation-worker.env" --entrypoint bun \
   "${image[evaluation-worker]}" -e 'import { loadWorkerConfig } from "@repo/backend/evaluation"; loadWorkerConfig(); console.log("Evaluation worker configuration passed.");'
 
-# NEXT_PUBLIC_* values cannot be corrected at container startup.
-docker run --rm --network none --entrypoint node -e "EXPECTED_ORIGIN=$origin" \
-  "${image[web]}" -e '
-    const fs = require("node:fs"), path = require("node:path");
-    function contains(dir) {
-      return fs.readdirSync(dir, { withFileTypes: true }).some(entry => {
-        const file = path.join(dir, entry.name);
-        return entry.isDirectory() ? contains(file) : entry.name.endsWith(".js") && fs.readFileSync(file, "utf8").includes(process.env.EXPECTED_ORIGIN);
-      });
-    }
-    if (!contains("/app/apps/web/.next/static")) {
-      console.error("Rebuild the web image with NEXT_PUBLIC_BACKEND_URL matching the deployment origin.");
-      process.exit(1);
-    }
-  '
-
 [[ $(df -Pk "$app_dir" | awk 'NR==2 {print $4}') -gt 262144 ]] || die "Less than 256 MiB remains after pulling images; free space before deploying."
 docker network inspect "$network" >/dev/null 2>&1 || docker network create "$network" >/dev/null
 mkdir -p "$app_dir/caddy"
@@ -130,7 +114,10 @@ fi
 cat > "$runtime_dir/Caddyfile" <<EOF
 ${origin#https://} {
     handle /api/* {
-        reverse_proxy backend:8080
+        reverse_proxy backend:8080 {
+            header_up X-RepoRound-Client-IP {remote_host}
+            header_up X-RepoRound-Proxy-Token {\$TRUSTED_PROXY_TOKEN}
+        }
     }
     handle /health {
         reverse_proxy backend:8080
@@ -140,7 +127,7 @@ ${origin#https://} {
     }
 }
 EOF
-docker run --rm --network none -v "$runtime_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
+docker run --rm --network none --env-file "$runtime_dir/proxy.env" -v "$runtime_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
   "$caddy_image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
 retire() {
@@ -206,6 +193,7 @@ docker run -d --name voice-agent --network "$network" \
 wait_healthy voice-agent 180
 created+=(caddy)
 docker run -d --name caddy --network "$network" --restart unless-stopped \
+  --env-file "$runtime_dir/proxy.env" \
   "${log_options[@]}" -p 80:80 -p 443:443 \
   -v "$app_dir/caddy:/etc/caddy:ro" -v caddy-data:/data -v caddy-config:/config \
   "$caddy_image" >/dev/null
@@ -214,10 +202,10 @@ echo "Waiting for public HTTPS and API access."
 curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
   --retry 30 --retry-delay 2 --retry-all-errors --retry-max-time 300 "$origin/health"
 curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "$origin/" -o /dev/null
-# Exercise the actual failing auth endpoint, but never print its access token.
+# Exercise Better Auth through Caddy without creating an account or session.
 auth_code=$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
-  -X POST "$origin/api/v1/auth/session" -o /dev/null -w '%{http_code}')
-[[ $auth_code == 201 ]] || die "Browser session smoke check returned HTTP $auth_code."
+  "$origin/api/auth/get-session" -o /dev/null -w '%{http_code}')
+[[ $auth_code == 200 ]] || die "Auth smoke check returned HTTP $auth_code."
 
 printf '%s\n' "$sha" > "$app_dir/deployed-sha"
 success=true

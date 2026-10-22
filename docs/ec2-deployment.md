@@ -11,9 +11,11 @@ install -d -m 700 ~/ai-interview
 chmod 600 ~/ai-interview/backend.env ~/ai-interview/voice-agent.env ~/ai-interview/evaluation-worker.env
 ```
 
-These files can use ordinary dotenv quotes and comments, including Windows line endings. The deployment helper parses them with the same `dotenv` dependency as the backend and creates temporary Docker-compatible copies. It never prints their values. It overrides the public CORS origin, internal backend address, backend port, and voice-outbox location. LiveKit credentials and `INTERNAL_API_TOKEN` must match. If Langfuse is configured, supply its URL and both keys together; otherwise omit all three. A blank optional Langfuse configuration is omitted from the generated files.
+These files can use ordinary dotenv quotes and comments, including Windows line endings. The deployment helper parses them with the same `dotenv` dependency as the backend and creates temporary Docker-compatible copies. It never prints their values. It overrides the public CORS/auth origin, internal backend address, backend port, and voice-outbox location. `backend.env` must contain `BETTER_AUTH_SECRET` (at least 32 persistent random characters), `RESEND_API_KEY`, and `AUTH_EMAIL_FROM` before deployment. LiveKit credentials and `INTERNAL_API_TOKEN` must match. If Langfuse is configured, supply its URL and both keys together; otherwise omit all three. A blank optional Langfuse configuration is omitted from the generated files.
 
 The evaluation worker shares `DATABASE_URL`, the model-router settings, and `BULLMQ_REDIS_URL` with the backend, so those values must match across `backend.env` and `evaluation-worker.env`; the helper rejects mismatches before touching containers. Set `BULLMQ_REDIS_URL` in `backend.env` (the relay publishes evaluation intents there) and, for System Design mode, point `FALKORDB_HOST`/`FALKORDB_PORT`/`FALKORDB_GRAPH` at a reachable FalkorDB. Redis and FalkorDB remain external services; they are not started by these scripts.
+
+The helper also generates a 64-character hex `TRUSTED_PROXY_TOKEN` and passes it only to the backend and Caddy. Caddy overwrites `X-RepoRound-Client-IP` with the immediate client's address and supplies the credential in an upstream-only header. The backend ignores forwarded identities without that credential. Keep the backend port unpublished, as in the deployment script. If placing another proxy/CDN in front of Caddy, configure and test trusted client-IP resolution there before enabling public traffic. The credential can optionally be pinned in `backend.env`; never expose it to browser configuration.
 
 Use your managed PostgreSQL URL, including provider-required TLS settings. Apply migrations manually before deploying a version that requires them. Do not remove quotes by copying a database password into a terminal command. The preflight opens the database and reads table counts without changing data.
 
@@ -25,7 +27,7 @@ In repository Settings → Environments → `production`, add the environment se
 - Variable `EC2_HOST`: `23.20.55.167` for the current practice instance.
 - Variable `EC2_USER`: `ubuntu`.
 - Variable `EC2_APP_DIR`: `/home/ubuntu/ai-interview`.
-- Variable `NEXT_PUBLIC_BACKEND_URL`: `https://23.20.55.167.sslip.io`. CI uses it to build the web image, and deployment uses it as the public origin.
+- Variable `PUBLIC_ORIGIN`: `https://23.20.55.167.sslip.io`. Deployment uses it as the public HTTPS origin for Caddy, `BETTER_AUTH_URL`, CORS, and trusted auth origins.
 - Variable `EC2_KNOWN_HOSTS`: the verified host-key lines for this server from your local `known_hosts`. The workflow requires strict host verification.
 
 On Windows, retrieve the public host keys you already accepted when connecting:
@@ -53,11 +55,11 @@ sudo bash scripts/deploy/deploy.sh \
   https://23.20.55.167.sslip.io manav2854 /home/ubuntu/ai-interview
 ```
 
-Deployment pulls all images and pins the local image IDs before changing containers. It parses credentials, validates configuration, checks database access and the auth/job tables, checks the web bundle's public URL, and validates Caddy configuration. A preflight failure leaves existing containers running. Insufficient disk space fails the deployment; images and volumes are never automatically pruned.
+Deployment pulls all images and pins the local image IDs before changing containers. It parses credentials, validates configuration, checks database access and the auth/job tables, and validates Caddy configuration. A preflight failure leaves existing containers running. Insufficient disk space fails the deployment; images and volumes are never automatically pruned.
 
 The script drains the voice worker while its backend is still available. Active interviews may take up to 65 minutes to finish; avoid beginning new sessions while deploying. It then replaces the backend, evaluation worker, web, voice worker, and proxy. The evaluation worker is stopped with a 300-second grace period so an in-flight evaluation can finish; the backend is started and healthy before the worker is replaced. Any intent published while the worker was down stays durable in PostgreSQL and is re-queued by the relay. There is brief downtime because this is a single-server deployment. The `voice-outbox`, `caddy-data`, and `caddy-config` volumes persist, and container logs are bounded.
 
-After startup, it checks Docker health, public HTTPS, the frontend, and `POST /api/v1/auth/session`. That last smoke check creates one anonymous browser-access session and discards its token without logging it. Microphone access and a complete voice interview still require a manual check.
+After startup, it checks Docker health, public HTTPS, the frontend, and `GET /api/auth/get-session`. The auth check creates no account or session. Microphone access and a complete voice interview still require a manual check.
 
 If replacement fails, the script attempts to restore the previous containers and proxy configuration. This is recovery of the previous configuration, not a guarantee that a previously broken deployment becomes healthy. It cannot undo database changes. Images are retained for manual rollback; choose an older compatible successful SHA in the same workflow. Do not roll back to an image that requires tables removed by a migration.
 

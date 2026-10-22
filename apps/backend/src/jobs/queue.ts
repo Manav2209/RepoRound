@@ -5,6 +5,9 @@ import { withLeaseRenewal } from "./lease.js";
 
 export class JobDeferred extends Error {}
 
+// Four total executions, including the initial attempt. Deferrals do not count.
+export const MAX_JOB_ATTEMPTS = 4;
+
 export async function enqueue(
   interviewId: string,
   kind: string,
@@ -72,7 +75,14 @@ export class JobWorker {
             },
           });
           if (!claimed.count) return;
+          const current = await prisma.interviewJob.findUniqueOrThrow({
+            where: { id: job.id },
+            select: { attempts: true },
+          });
+          const attempt = current.attempts;
           try {
+            if (attempt > MAX_JOB_ATTEMPTS)
+              throw new Error("Job attempt limit exhausted");
             const handler = this.handlers[job.kind];
             if (!handler) throw new Error(`Unknown job kind ${job.kind}`);
             await withLeaseRenewal(
@@ -113,7 +123,7 @@ export class JobWorker {
               });
               return;
             }
-            const exhausted = job.attempts >= 4;
+            const exhausted = attempt >= MAX_JOB_ATTEMPTS;
             await prisma.$transaction(async (tx) => {
               const changed = await tx.interviewJob.updateMany({
                 where: { id: job.id, leaseToken: token },
@@ -122,7 +132,7 @@ export class JobWorker {
                   leaseToken: null,
                   leaseUntil: null,
                   error: String(err).slice(0, 500),
-                  runAt: new Date(Date.now() + 2000 * 2 ** job.attempts),
+                  runAt: new Date(Date.now() + 2000 * 2 ** (attempt - 1)),
                 },
               });
               if (!changed.count) return;

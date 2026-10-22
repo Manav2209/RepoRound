@@ -1,4 +1,4 @@
-import { objectiveSchema } from "../schemas.js";
+import { prepareGithubObjectives } from "../schemas.js";
 import { selectObjective } from "../policies.js";
 import type { InterviewObjective } from "../interview.types.js";
 
@@ -20,16 +20,7 @@ export function isGithubReady(interview: GithubReadiness): boolean {
 export function githubObjectives(
   plan: { objectives: unknown } | null,
 ): InterviewObjective[] {
-  return objectiveSchema
-    .array()
-    .min(1)
-    .parse(plan?.objectives)
-    .map((o) => ({
-      ...o,
-      status: "NOT_STARTED" as const,
-      evidenceIds: [],
-      attempts: 0,
-    }));
+  return prepareGithubObjectives(plan?.objectives);
 }
 
 export { selectObjective };

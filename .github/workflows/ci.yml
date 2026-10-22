@@ -16,7 +16,6 @@ concurrency:
 
 env:
   NEXT_TELEMETRY_DISABLED: "1"
-  NEXT_PUBLIC_BACKEND_URL: ${{ vars.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080' }}
   DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'manav2854' }}
   # Manual runs validate builds. Only a main push publishes images.
   PUBLISH_IMAGES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -124,8 +123,6 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          build-args: |
-            NEXT_PUBLIC_BACKEND_URL=${{ env.NEXT_PUBLIC_BACKEND_URL }}
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
 

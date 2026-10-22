@@ -7,6 +7,7 @@ import { objectivesForProblem } from "../interview/strategies/system-design.js";
 import { getProblem } from "./problems.js";
 import type { LlmClient } from "../llm/llm.client.js";
 import { newId } from "../lib/ids.js";
+import { createTestUser } from "../../test-fixtures/database.js";
 import type {
   ArchitectureSnapshot,
   SubmitArchitectureRequest,
@@ -79,6 +80,7 @@ class FakeGraphStore implements DesignGraphStore {
 
 const store = new FakeGraphStore();
 const createdInterviewIds: string[] = [];
+const createdUserIds: string[] = [];
 
 function snapshot(label = "API"): ArchitectureSnapshot {
   return {
@@ -108,9 +110,12 @@ function request(
 }
 
 async function newInterview(mode: "GITHUB" | "SYSTEM_DESIGN"): Promise<string> {
+  const userId = await createTestUser();
+  createdUserIds.push(userId);
   const interview = await prisma.interview.create({
     data: {
       mode,
+      userId,
       systemDesignProblemId:
         mode === "SYSTEM_DESIGN" ? "notification-system" : null,
       githubUrl: mode === "GITHUB" ? "https://github.com/example/repo" : null,
@@ -129,10 +134,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!enabled) return;
-  await prisma.interview.deleteMany({
-    where: { id: { in: createdInterviewIds } },
-  });
-  setDesignGraphStore(null);
+    await prisma.interview.deleteMany({
+      where: { id: { in: createdInterviewIds } },
+    });
+    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+    setDesignGraphStore(null);
   await prisma.$disconnect();
 });
 
@@ -404,3 +410,58 @@ suite("revision 2 is gated on the interviewer requesting one", async () => {
   });
   expect(rows.map((r) => r.revision)).toEqual([1, 2]);
 });
+
+suite(
+  "publication contention keeps revision 2 inactive and a replay recovers it",
+  async () => {
+    const interviewId = await newInterview("SYSTEM_DESIGN");
+    const first = await submitArchitecture({
+      interviewId,
+      request: request(crypto.randomUUID(), 0),
+    });
+    const initial = initialSystemDesignState({
+      problemId: "notification-system",
+      activeRevision: 1,
+      activeSubmissionId: first.submissionId,
+      objectives: [],
+    });
+    initial.systemDesign!.phase = "REVISION_REQUESTED";
+    initial.systemDesign!.challengeIssued = true;
+    await prisma.interviewRuntime.create({
+      data: {
+        interviewId,
+        data: initial as unknown as Prisma.InputJsonValue,
+        deadlineAt: new Date(Date.now() + 600000),
+        leaseToken: "test-busy-lease",
+        leaseUntil: new Date(Date.now() + 60000),
+      },
+    });
+    const revision = request(crypto.randomUUID(), 1, snapshot("Revised"));
+    await expect(
+      submitArchitecture({ interviewId, request: revision }),
+    ).rejects.toMatchObject({ status: 503 });
+    const failed = await prisma.systemDesignSubmission.findUniqueOrThrow({
+      where: { requestId: revision.requestId },
+    });
+    expect(failed.graphStatus).toBe("FAILED");
+    const before = await prisma.interviewRuntime.findUniqueOrThrow({
+      where: { interviewId },
+    });
+    expect(stateSchema.parse(before.data).systemDesign!.activeRevision).toBe(1);
+    await prisma.interviewRuntime.update({
+      where: { interviewId },
+      data: { leaseToken: null, leaseUntil: null },
+    });
+    const recovered = await submitArchitecture({
+      interviewId,
+      request: revision,
+    });
+    expect(recovered.graphStatus).toBe("READY");
+    const after = await prisma.interviewRuntime.findUniqueOrThrow({
+      where: { interviewId },
+    });
+    const current = stateSchema.parse(after.data).systemDesign!;
+    expect(current.activeSubmissionId).toBe(recovered.submissionId);
+    expect(current.revisionSubmitted).toBe(true);
+  },
+);

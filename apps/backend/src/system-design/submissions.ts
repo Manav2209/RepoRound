@@ -8,7 +8,10 @@ import type {
 import { newId } from "../lib/ids.js";
 import { designGraphStore } from "./graph.js";
 import { stateSchema } from "../interview/schemas.js";
-import { withInterviewLock } from "../interview/runtime-lock.js";
+import {
+  InterviewBusyError,
+  withInterviewLock,
+} from "../interview/runtime-lock.js";
 
 export class SubmissionError extends Error {
   constructor(
@@ -129,7 +132,10 @@ export async function submitArchitecture(input: {
   });
   if (!interview) throw new SubmissionError("Interview not found", 404);
   if (interview.mode !== "SYSTEM_DESIGN")
-    throw new SubmissionError("Interview is not a system design interview", 409);
+    throw new SubmissionError(
+      "Interview is not a system design interview",
+      409,
+    );
 
   const replay = await prisma.systemDesignSubmission.findUnique({
     where: { requestId: request.requestId },
@@ -140,7 +146,9 @@ export async function submitArchitecture(input: {
         "Request ID was used with a different submission",
         409,
       );
-    if (replay.graphStatus === "READY") return outcome(replay, true);
+    if (replay.graphStatus === "READY") {
+      return replayReady(interviewId, replay);
+    }
     if (replay.graphStatus === "BUILDING")
       throw new SubmissionError("Submission is still being processed", 409);
     return buildAndPublish(replay.id, snapshot, true);
@@ -178,12 +186,17 @@ export async function submitArchitecture(input: {
         },
       });
       if (concurrent && concurrent.requestId === request.requestId) {
-        if (concurrent.snapshotHash !== hash)
+        if (
+          concurrent.interviewId !== interviewId ||
+          concurrent.snapshotHash !== hash
+        )
           throw new SubmissionError(
             "Request ID was used with a different submission",
             409,
           );
-        if (concurrent.graphStatus === "READY") return outcome(concurrent, true);
+        if (concurrent.graphStatus === "READY") {
+          return replayReady(interviewId, concurrent);
+        }
         if (concurrent.graphStatus === "FAILED")
           return buildAndPublish(concurrent.id, snapshot, true);
       }
@@ -205,6 +218,39 @@ function outcome(
     next: row.revision === 1 ? "START_INTERVIEW" : "RESUME_INTERVIEW",
     replayed,
   };
+}
+
+async function replayReady(
+  interviewId: string,
+  row: { id: string; revision: number },
+): Promise<SubmissionOutcome> {
+  const runtime = await prisma.interviewRuntime.findUnique({
+    where: { interviewId },
+  });
+  if (runtime) {
+    const state = stateSchema.parse(runtime.data);
+    const sd = state.systemDesign;
+    if (
+      state.ended ||
+      (sd &&
+        (sd.activeRevision > row.revision ||
+          (sd.activeRevision === row.revision &&
+            sd.activeSubmissionId === row.id &&
+            (row.revision !== 2 || sd.revisionSubmitted))))
+    )
+      return outcome(row, true);
+  }
+  try {
+    await publishActiveRevision(interviewId, row.id, row.revision);
+  } catch (error) {
+    if (error instanceof InterviewBusyError)
+      throw new SubmissionError(
+        "Interview is busy; retry the same request",
+        503,
+      );
+    throw error;
+  }
+  return outcome(row, true);
 }
 
 async function buildAndPublish(
@@ -234,7 +280,11 @@ async function buildAndPublish(
       verified.edgeCount !== snapshot.edges.length ||
       verified.crossSubmissionEdges !== 0
     )
-      throw new Error(`Graph verification mismatch: ${JSON.stringify(verified)}`);
+      throw new Error(
+        `Graph verification mismatch: ${JSON.stringify(verified)}`,
+      );
+    // READY and runtime publication commit together after graph verification.
+    await publishActiveRevision(row.interviewId, row.id, row.revision);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.systemDesignSubmission.updateMany({
@@ -242,16 +292,13 @@ async function buildAndPublish(
       data: { graphStatus: "FAILED", graphError: message.slice(0, 500) },
     });
     throw new SubmissionError(
-      "Graph installation failed; retry the same request",
+      err instanceof InterviewBusyError
+        ? "Interview is busy; retry the same request"
+        : "Submission publication failed; retry the same request",
       503,
     );
   }
 
-  await prisma.systemDesignSubmission.updateMany({
-    where: { id: submissionId },
-    data: { graphStatus: "READY", graphError: null, readyAt: new Date() },
-  });
-  await publishActiveRevision(row.interviewId, row.id, row.revision);
   return outcome(row, replayed);
 }
 
@@ -260,13 +307,24 @@ async function publishActiveRevision(
   submissionId: string,
   revision: number,
 ): Promise<void> {
+  const markReady = async (tx: Prisma.TransactionClient) => {
+    const updated = await tx.systemDesignSubmission.updateMany({
+      where: { id: submissionId, interviewId },
+      data: { graphStatus: "READY", graphError: null, readyAt: new Date() },
+    });
+    if (!updated.count)
+      throw new Error("Submission disappeared during publication");
+  };
   const runtime = await prisma.interviewRuntime.findUnique({
     where: { interviewId },
   });
   if (!runtime) {
-    await prisma.interview.updateMany({
-      where: { id: interviewId, status: "created" },
-      data: { status: "ready", error: null },
+    await prisma.$transaction(async (tx) => {
+      await tx.interview.updateMany({
+        where: { id: interviewId, status: "created" },
+        data: { status: "ready", error: null },
+      });
+      await markReady(tx);
     });
     return;
   }
@@ -275,7 +333,16 @@ async function publishActiveRevision(
       where: { interviewId },
     });
     const state = stateSchema.parse(row.data);
-    if (!state.systemDesign) return;
+    if (!state.systemDesign)
+      throw new Error("System design runtime is missing");
+    // Replaying an old revision must never roll back a newer published design.
+    if (state.systemDesign.activeRevision > revision) return;
+    if (
+      state.systemDesign.activeSubmissionId === submissionId &&
+      state.systemDesign.activeRevision === revision &&
+      (revision !== 2 || state.systemDesign.revisionSubmitted)
+    )
+      return;
     state.systemDesign.activeRevision = revision;
     state.systemDesign.activeSubmissionId = submissionId;
     if (revision === 2) state.systemDesign.revisionSubmitted = true;
@@ -289,6 +356,7 @@ async function publishActiveRevision(
       });
       if (!updated.count)
         throw new Error("Runtime changed while publishing submission");
+      await markReady(tx);
     });
   });
 }

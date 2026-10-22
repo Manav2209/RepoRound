@@ -6,7 +6,17 @@ export interface EvaluationDimensions {
   depth: number | null;
 }
 
+/** Counts refer to nonempty candidate turns, not assistant messages. */
+export interface EvaluationCoverage {
+  totalTurns: number;
+  includedTurns: number;
+  omittedTurns: number;
+  truncatedTurns: number;
+  quality: "complete" | "partial";
+}
+
 export interface Evaluation {
+  coverage?: EvaluationCoverage;
   score: number | null;
   dimensions: EvaluationDimensions;
   strengths: string[];
@@ -44,7 +54,16 @@ export interface EvaluationContext {
       topic: string;
       description: string;
       status?: string;
+      kind?: string;
+      phase?: string;
     }[];
+  };
+  github?: {
+    segment: string;
+    mainQuestionsAsked: number;
+    mainQuestionsTarget: number;
+    followUpsAsked: number;
+    appliedQuestionsAsked: number;
   };
   transcript: {
     id: string;
@@ -71,5 +90,8 @@ export interface EvaluationContext {
     text: string;
     objectiveId: string;
     reason: string;
+    kind?: string;
+    phase?: string;
+    repositoryReferences?: { path: string; startLine: number; endLine: number }[];
   }[];
 }

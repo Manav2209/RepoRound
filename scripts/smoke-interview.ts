@@ -8,13 +8,16 @@ config({
   path: fileURLToPath(new URL("../apps/backend/.env", import.meta.url)),
 });
 const base = "http://localhost:8080";
-let token = "";
+const publicOrigin = "http://localhost:3000";
+let cookie = "";
 async function request(path: string, body?: unknown, internal = false) {
   const response = await fetch(`${base}${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${internal ? process.env.INTERNAL_API_TOKEN : token}`,
+      ...(internal
+        ? { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` }
+        : { Cookie: cookie, Origin: publicOrigin }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(30000),
@@ -24,8 +27,48 @@ async function request(path: string, body?: unknown, internal = false) {
   return data;
 }
 
+function absorbCookies(headers: Headers) {
+  const values =
+    typeof headers.getSetCookie === "function"
+      ? headers.getSetCookie()
+      : [headers.get("set-cookie") ?? ""];
+  for (const value of values) {
+    const pair = value.split(";", 1)[0];
+    if (!pair) continue;
+    const name = pair.slice(0, pair.indexOf("="));
+    cookie = cookie
+      .split("; ")
+      .filter((entry) => entry && entry.slice(0, entry.indexOf("=")) !== name)
+      .concat(pair)
+      .join("; ");
+  }
+}
+
 assert.equal((await request("/health")).ok, true);
-token = (await request("/api/v1/auth/session", {})).token;
+
+const email = `smoke-${Date.now()}@example.com`;
+const password = "smoke-test-password-123";
+const signUp = await fetch(`${base}/api/auth/sign-up/email`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Origin: publicOrigin },
+  body: JSON.stringify({ name: "Smoke Test", email, password }),
+  signal: AbortSignal.timeout(30000),
+});
+assert(signUp.ok, `sign-up: HTTP ${signUp.status} ${await signUp.text()}`);
+absorbCookies(signUp.headers);
+
+const { prisma } = await import("@repo/db");
+await prisma.user.update({ where: { email }, data: { emailVerified: true } });
+const signIn = await fetch(`${base}/api/auth/sign-in/email`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Origin: publicOrigin },
+  body: JSON.stringify({ email, password }),
+  signal: AbortSignal.timeout(30000),
+});
+assert(signIn.ok, `sign-in: HTTP ${signIn.status} ${await signIn.text()}`);
+absorbCookies(signIn.headers);
+assert(cookie.includes("reporound.session_token"), "sign-in must set a session cookie");
+console.log("Created verified smoke account:", email);
 const catalog = await request("/api/v1/system-design/problems");
 assert(
   catalog.problems.some(
@@ -125,3 +168,6 @@ console.log(
     candidateTurns: result.summary.candidateTurns,
   }),
 );
+await request("/api/auth/delete-user", { password });
+await prisma.$disconnect();
+console.log("Deleted smoke account and interview data");

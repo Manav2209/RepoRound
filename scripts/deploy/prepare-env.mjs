@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
 
 // Resolve the existing backend dependency both in the checkout and in its image.
 const { parse } = createRequire(
@@ -46,7 +47,19 @@ export function prepareEnv(backendText, voiceText, publicOrigin, workerText) {
     "AI_ROUTER_MODEL",
     "INTERNAL_API_TOKEN",
   ];
-  requireValues(backend, [...shared, "DATABASE_URL"], "backend.env");
+  requireValues(
+    backend,
+    [
+      ...shared,
+      "DATABASE_URL",
+      "BETTER_AUTH_SECRET",
+      "RESEND_API_KEY",
+      "AUTH_EMAIL_FROM",
+    ],
+    "backend.env",
+  );
+  if (backend.BETTER_AUTH_SECRET.length < 32)
+    throw new Error("BETTER_AUTH_SECRET must be at least 32 characters");
   requireValues(voice, [...shared, "DEEPGRAM_API_KEY"], "voice-agent.env");
   for (const key of [
     "LIVEKIT_URL",
@@ -123,6 +136,19 @@ export function prepareEnv(backendText, voiceText, publicOrigin, workerText) {
   }
   backend.PORT = "8080";
   backend.CORS_ALLOWED_ORIGINS = publicOrigin;
+  // Auth links and cookies must use the public HTTPS origin, never the
+  // container's internal address.
+  backend.BETTER_AUTH_URL = publicOrigin;
+  backend.AUTH_TRUSTED_ORIGINS =
+    backend.AUTH_TRUSTED_ORIGINS?.trim() || publicOrigin;
+  backend.AUTH_COOKIE_SECURE = "true";
+  // Caddy overwrites client-supplied identity headers and authenticates itself
+  // with a credential that is never supplied to the browser or voice worker.
+  backend.TRUSTED_PROXY_TOKEN ||= randomBytes(32).toString("hex");
+  if (!/^[a-f0-9]{64}$/.test(backend.TRUSTED_PROXY_TOKEN))
+    throw new Error(
+      "TRUSTED_PROXY_TOKEN must be 64 lowercase hexadecimal characters",
+    );
   voice.BACKEND_BASE_URL = "http://backend:8080";
   voice.VOICE_OUTBOX_DIR = "/app/data/voice-outbox";
   const serialize = (env) =>
@@ -139,6 +165,7 @@ export function prepareEnv(backendText, voiceText, publicOrigin, workerText) {
     backend: serialize(backend),
     voice: serialize(voice),
     worker: worker ? serialize(worker) : "",
+    proxy: serialize({ TRUSTED_PROXY_TOKEN: backend.TRUSTED_PROXY_TOKEN }),
   };
 }
 
@@ -154,6 +181,7 @@ if (
       readFileSync("/run/worker.input", "utf8"),
     );
     writeFileSync("/run/output/backend.env", env.backend, { mode: 0o600 });
+    writeFileSync("/run/output/proxy.env", env.proxy, { mode: 0o600 });
     writeFileSync("/run/output/voice-agent.env", env.voice, { mode: 0o600 });
     writeFileSync("/run/output/evaluation-worker.env", env.worker, {
       mode: 0o600,

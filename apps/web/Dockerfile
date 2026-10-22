@@ -25,9 +25,7 @@ RUN bun install --frozen-lockfile --filter web --network-concurrency=8
 COPY apps/web ./apps/web
 COPY packages/ui ./packages/ui
 COPY packages/typescript-config ./packages/typescript-config
-# Public variables are embedded into browser JavaScript during next build.
-ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:8080
-ENV NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL} NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN bun run --cwd apps/web build
 
 FROM base AS runner

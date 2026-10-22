@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { BackendConfig } from "../config.js";
-import { internalAuthFromConfig, rateLimit } from "./auth.js";
+import { internalAuthFromConfig, rateLimit } from "./security.js";
 import {
   RealtimeEventService,
   realtimeEventSchema,

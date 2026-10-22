@@ -33,6 +33,18 @@ export default function InterviewResult({
   const score = result.score;
   return (
     <div className="result">
+      {result.coverage?.quality === "partial" && (
+        <section className="panel" role="status">
+          <h2>Partial assessment</h2>
+          <p>
+            This assessment includes {result.coverage.includedTurns} of{" "}
+            {result.coverage.totalTurns} recorded answers.{" "}
+            {result.coverage.truncatedTurns} answers were shortened. Feedback
+            applies to the reviewed excerpts; missing details are not treated as
+            weaknesses.
+          </p>
+        </section>
+      )}
       <div className="result-overview">
         <section className="panel score-panel">
           <p className="eyebrow">Overall assessment</p>

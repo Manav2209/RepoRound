@@ -26,7 +26,6 @@ Use Node.js 24 and Bun 1.4.2. In PowerShell, set a placeholder URL for this term
 node --version
 bun --version
 $env:DATABASE_URL = 'postgresql://ci:ci@127.0.0.1:5432/ai_interviewer_ci?schema=public'
-$env:NEXT_PUBLIC_BACKEND_URL = 'http://localhost:8080'
 $env:NEXT_TELEMETRY_DISABLED = '1'
 bun install --frozen-lockfile --network-concurrency=8
 bun run db:generate
@@ -42,7 +41,7 @@ To reproduce the Docker jobs, start Docker Desktop in Linux container mode and r
 
 ```powershell
 docker build -f apps/backend/Dockerfile -t ai-interview-backend:ci .
-docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_BACKEND_URL=http://localhost:8080 -t ai-interview-web:ci .
+docker build -f apps/web/Dockerfile -t ai-interview-web:ci .
 docker build -f apps/voice-agent/Dockerfile -t ai-interview-voice-agent:ci .
 ```
 
@@ -83,7 +82,7 @@ Your Docker Desktop login was enough for the manual uploads. GitHub's runners ne
 Under the **Variables** tab, you can optionally set:
 
 - `DOCKERHUB_USERNAME`: defaults to `manav2854`. Change it only when using a token and image repositories for another Docker Hub account.
-- `NEXT_PUBLIC_BACKEND_URL`: the backend URL reachable by the candidate's browser. It is embedded in the web bundle during the build. The default `http://localhost:8080` works for local practice; set your public backend URL before publishing images for deployment.
+- `PUBLIC_ORIGIN`: the public HTTPS origin used by the deploy workflow. The web image contains no backend URL because production serves `/api/*` through Caddy on the same origin.
 
 The three Docker Hub repositories already exist from the manual upload: `manav2854/ai-interview-backend`, `manav2854/ai-interview-web`, and `manav2854/ai-interview-voice-agent`.
 

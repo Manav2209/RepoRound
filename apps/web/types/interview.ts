@@ -31,6 +31,13 @@ export interface SessionInfo {
 }
 
 export interface InterviewResult {
+  coverage?: {
+    totalTurns: number;
+    includedTurns: number;
+    omittedTurns: number;
+    truncatedTurns: number;
+    quality: "complete" | "partial";
+  };
   status: string;
   score: number | null;
   dimensions: Record<string, number | null>;
@@ -60,6 +67,14 @@ export interface InterviewResult {
 }
 
 export type InterviewMode = "GITHUB" | "SYSTEM_DESIGN";
+
+export interface ReportListItem {
+  interviewId: string;
+  mode: InterviewMode;
+  title: string;
+  score: number | null;
+  completedAt: string | null;
+}
 
 export interface InterviewView {
   interviewId: string;

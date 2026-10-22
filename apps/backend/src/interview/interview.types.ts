@@ -1,4 +1,9 @@
 export type InterviewDifficulty = "EASY" | "MEDIUM" | "HARD" | "EXPERT";
+export type InterviewQuestionKind =
+  | "OPENING"
+  | "REPOSITORY"
+  | "APPLIED_DESIGN";
+export type GithubSegment = "OPENING" | "REPOSITORY" | "APPLIED_DESIGN";
 export type InterviewPhase =
   | "INTRO"
   | "PROJECT_OVERVIEW"
@@ -11,6 +16,18 @@ export type InterviewPhase =
 export type ObjectiveStatus =
   "NOT_STARTED" | "IN_PROGRESS" | "SATISFIED" | "INSUFFICIENT";
 
+export interface ObjectiveSource {
+  path: string;
+  note?: string;
+}
+
+export interface AppliedScenario {
+  changedCondition: string;
+  focus: string;
+  detection: string;
+  newTradeoff: string;
+}
+
 export interface InterviewObjective {
   id: string;
   phase: Exclude<InterviewPhase, "INTRO" | "FINAL" | "COMPLETED">;
@@ -21,6 +38,24 @@ export interface InterviewObjective {
   status: ObjectiveStatus;
   evidenceIds: string[];
   attempts: number;
+  kind?: InterviewQuestionKind;
+  whyItMatters?: string;
+  alternatives?: string[];
+  uncertainties?: string[];
+  sources?: ObjectiveSource[];
+  scenario?: AppliedScenario;
+}
+
+export interface GithubInterviewState {
+  segment: GithubSegment;
+  budgetMinutes: number;
+  mainQuestionsAsked: number;
+  mainQuestionsTarget: number;
+  followUpsAsked: number;
+  appliedQuestionsAsked: number;
+  maxMainQuestions: number;
+  maxFollowUps: number;
+  maxAppliedQuestions: number;
 }
 
 export interface CandidateEvidence {
@@ -79,6 +114,17 @@ export interface QuestionRecord {
   answerTurnId?: string;
   repositoryReferences?: RepositoryReference[];
   spokenAt?: string;
+  kind?: InterviewQuestionKind;
+}
+
+export interface AnswerAssessment {
+  objectiveId: string;
+  turnId: string;
+  answeredQuestion: boolean;
+  explainedResponsibilities: boolean;
+  identifiedTradeoffOrFailure: boolean;
+  consistentWithEvidence: boolean;
+  objectiveSatisfied: boolean;
 }
 
 export type SystemDesignPhase =
@@ -101,6 +147,7 @@ export interface SystemDesignInterviewState {
 
 export interface InterviewState {
   mode?: "GITHUB" | "SYSTEM_DESIGN";
+  github?: GithubInterviewState;
   systemDesign?: SystemDesignInterviewState;
   phase: InterviewPhase;
   difficulty: InterviewDifficulty;
@@ -114,6 +161,7 @@ export interface InterviewState {
   exploredTopics?: string[];
   endReason?: string;
   toolCalls?: number;
+  lastAssessment?: AnswerAssessment;
 }
 
 export type NextInterviewAction =
@@ -131,7 +179,7 @@ export type NextInterviewAction =
 
 export interface InterviewPlan {
   role: string;
-  difficulty: "junior" | "mid" | "senior";
+  difficulty: "mid" | "senior";
   topics: string[];
   objectives: InterviewObjective[];
 }

@@ -46,6 +46,7 @@ Claim verification checks whether fetched code supports or contradicts a factual
 - Disconnects allow a configured reconnect window. Heartbeats detect stale workers. Reconnecting restores the pending question and persisted transcript.
 - The browser End action immediately stops further progression. Finalization and evaluation use unique durable job keys, expiring leases, and bounded retries.
 - Failed evaluations can be retried from the result page.
+- PostgreSQL jobs allow four total executions, including the initial attempt; lock contention and intentional deferrals do not spend that budget. BullMQ evaluation retries have their own policy.
 - Voice events are journaled until the backend acknowledges them. For durable recovery across container replacement, mount `VOICE_OUTBOX_DIR` on persistent storage. Its default OS temporary directory covers process restarts on the same host.
 
 ## Repository knowledge and limits
@@ -159,13 +160,19 @@ The evaluation includes technical depth, architecture, debugging, implementation
 
 The responsive result view includes a skill breakdown, supporting answer quotes, session details, transcript review, and an option to regenerate an assessment of the saved answers.
 
+Evaluation reads every transcript page. Candidate answers share the model input budget, retaining both the beginning and end of long answers. The completion event records included, omitted and shortened candidate-turn counts. Partial coverage is shown in the result view and feedback, with confidence capped at 0.65; omitted content is not evidence of a weakness. Older assessments without coverage metadata remain readable.
+
 ## Access and security
 
-The browser automatically obtains a random, 30-day anonymous access token. Only its hash is stored on the server. Interviews belong to the corresponding browser user; every public interview operation checks ownership. Browser tokens are stored locally, so clearing browser storage removes access to those interviews. This flow does not include account signup or cross-device recovery.
+RepoRound requires an email/password account with a verified email. Better Auth runs at `/api/auth/*`, stores sessions in PostgreSQL, and issues HttpOnly `SameSite=Lax` cookies scoped to the app origin. Passwords are hashed with Argon2id. Session tokens are stored as an HMAC-SHA256 digest, so a database read cannot be replayed as a browser session. Cookies are `Secure` when `BETTER_AUTH_URL` uses HTTPS.
 
-Interviews created before ownership was introduced have no browser owner and are inaccessible through the protected public API. Create a new interview after upgrading; migration does not assign old interviews to an arbitrary user.
+Interviews belong to the authenticated account; every public interview operation checks ownership on the server. The API never accepts a user ID from the browser. Sign-up, sign-in, resend-verification, and password-reset requests are rate limited per client IP. Password changes and resets revoke existing sessions. Google and GitHub sign-in are enabled only when both provider credentials are configured; implicit email-based account linking is disabled.
 
-The voice worker uses a separate internal bearer token and must supply a session belonging to the interview. The browser never receives server credentials. Database-backed rate limits cover access bootstrap, interview creation, public operations, internal events, and candidate turns.
+Accounts can be deleted from `/account`. Deletion removes the user's DesignComponent graph data first, then cascades through interviews, transcripts, evaluations, sessions, and linked provider accounts. If graph cleanup fails, account deletion stops rather than leaving orphaned data. The authentication migration intentionally deletes pre-auth anonymous browser sessions and interviews instead of guessing an owner.
+
+The voice worker uses a separate internal bearer token and must supply a session belonging to the interview. The browser never receives server credentials or the internal token. Database-backed rate limits also cover interview creation, public operations, internal events, and candidate turns.
+
+EC2 deployment generates a separate proxy credential for Caddy and the backend. Caddy overwrites the client-IP and proxy-credential headers; the backend accepts that client identity only when the credential matches. Other forwarding headers are ignored. This configuration assumes browsers connect directly to Caddy; adding a CDN requires configuring its trusted client identity at the proxy boundary. Unexpected API failures return a generic error and a server-generated request ID.
 
 ## Setup
 
@@ -175,7 +182,7 @@ Requirements: Bun 1.4.2, Node.js 24+, a PostgreSQL instance (local or managed), 
 bun install
 ```
 
-Copy each app's `.env.example` to `.env` and fill in credentials. Copy `packages/db/.env.example` to `packages/db/.env` and set its `DATABASE_URL` to your database's direct PostgreSQL connection URL. Set the backend's `DATABASE_URL` to the same database; the application may use a pooled connection URL. The backend and voice worker must share `INTERNAL_API_TOKEN`. The web app uses `NEXT_PUBLIC_BACKEND_URL`. From the repository root, generate the Prisma client and run migrations yourself against that database:
+Copy each app's `.env.example` to `.env` and fill in credentials. Copy `packages/db/.env.example` to `packages/db/.env` and set its `DATABASE_URL` to your database's direct PostgreSQL connection URL. Set the backend's `DATABASE_URL` to the same database; the application may use a pooled connection URL. The backend and voice worker must share `INTERNAL_API_TOKEN`. From the repository root, generate the Prisma client and run migrations yourself against that database:
 
 ```bash
 bun run db:generate
@@ -183,11 +190,15 @@ bun run db:migrate:deploy
 bun run db:migrate:status
 ```
 
+Authentication requires `BETTER_AUTH_URL` set to the public frontend origin (for example `http://localhost:3000`) and `BETTER_AUTH_SECRET` with at least 32 random characters. Locally, unset Resend credentials print verification and reset links to the backend console. Production requires `RESEND_API_KEY` and `AUTH_EMAIL_FROM`; set `AUTH_COOKIE_SECURE=false` only for local HTTP development. Optional `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` enable those providers; configure their callback URLs as `BETTER_AUTH_URL/api/auth/callback/google` and `.../github`. If you add more public origins, include them in `AUTH_TRUSTED_ORIGINS` and `CORS_ALLOWED_ORIGINS`.
+
+The web app calls the API through same-origin relative URLs. Next.js forwards `/api/*` to `BACKEND_URL` during local development (default `http://localhost:8080`); production Caddy routes `/api/*` directly to the backend.
+
 Database commands are root aliases for scripts in `packages/db`; Prisma dependencies and files live in that package. Prisma loads `packages/db/.env` for these commands. Alternatively, export `DATABASE_URL` in your shell. Development migrations use `db:migrate`; deployments use `db:migrate:deploy`.
 
-When applying the repository-context consolidation to an existing deployment, stop the backend and voice workers first, take a database backup, apply the migration manually, and start images built from the updated code. The previous backend requires the removed table and cannot run against the new schema.
+When applying the authentication migration to an existing deployment, stop the backend and voice workers first, take a database backup, apply the migration manually, and start images built from the updated code. The migration deletes anonymous browser sessions and their interviews; it does not assign them to an account. The previous backend requires the removed tables and cannot run against the new schema.
 
-The backend defaults to a 30-minute interview and a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero controls answer boundaries with a 1-second silence window, while Deepgram final segments accumulate within an answer (500 ms provider endpointing). Silero also detects interruptions; its defaults require 400 ms of speech and two transcribed words for interruption, reducing accidental cancellation from brief noises.
+The backend targets 10–15 minutes for GitHub repository interviews and 30 minutes for system-design interviews, with a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero controls answer boundaries with a 1-second silence window, while Deepgram final segments accumulate within an answer (500 ms provider endpointing). Silero also detects interruptions; its defaults require 400 ms of speech and two transcribed words for interruption, reducing accidental cancellation from brief noises.
 
 Start the backend and web app from the repository root:
 
@@ -225,7 +236,7 @@ bun run db:migrate:deploy
 
 The backend image generates the Prisma client during its build. Client generation creates application code from the schema; it does not apply migrations or copy database data. Migration files remain in the repository for your manual migration workflow. The application containers do not run migrations on startup.
 
-`NEXT_PUBLIC_BACKEND_URL` must be reachable by the candidate's browser and is embedded during the web image build. Pass the public API URL with `--build-arg NEXT_PUBLIC_BACKEND_URL=...` when building the web image, and add the frontend origin to `CORS_ALLOWED_ORIGINS` in `apps/backend/.env`. Setting the URL only when running a built container does not change the browser bundle.
+The web image contains no public backend URL. Serve the web app and backend behind one origin so browser requests to `/api/*` reach the backend and authentication cookies remain same-origin. The EC2 deployment's Caddy configuration does this. Add that public frontend origin to `CORS_ALLOWED_ORIGINS`, and set `BETTER_AUTH_URL` to it.
 
 If a provider runs on the Docker host, use `host.docker.internal` instead of `localhost` in its configured URL on Docker Desktop. A self-hosted LiveKit URL must also be reachable by the browser, since it is returned with the session token.
 
@@ -235,7 +246,7 @@ Build individual images from the same root:
 docker build -f apps/backend/Dockerfile -t ai-interview-backend:local .
 docker build -f apps/voice-agent/Dockerfile -t ai-interview-voice-agent:local .
 docker build -f apps/evaluation-worker/Dockerfile -t ai-interview-evaluation-worker:local .
-docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_BACKEND_URL=http://localhost:8080 -t ai-interview-web:local .
+docker build -f apps/web/Dockerfile -t ai-interview-web:local .
 ```
 
 Run the images individually with Docker or your deployment platform. Supply the backend, voice worker, and evaluation worker environment variables at runtime. The voice worker's `BACKEND_BASE_URL` must resolve to the backend from inside its container. The evaluation worker needs the same `DATABASE_URL`, `BULLMQ_REDIS_URL`, and model-router credentials as the backend; it has no listening port. `apps/backend` and `apps/evaluation-worker` connect to Redis, so it must be reachable from both containers. Publish port 8080 for the backend and port 3000 for the web app when running locally, and wait for the backend's `/health` endpoint before starting the voice worker.
@@ -254,7 +265,7 @@ To export traces, configure `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, and `LAN
 
 GitHub Actions runs code checks and builds all four Docker images (backend, web, voice-agent, evaluation-worker) on pull requests, pushes to `main`, and manual runs. After code checks pass on a `main` push, it publishes images to Docker Hub under `manav2854` with `sha-<full commit SHA>` tags. Publishing requires the `DOCKERHUB_TOKEN` repository secret. Follow [docs/ci-practice.md](docs/ci-practice.md) to configure credentials, trigger runs, diagnose a deliberate failure, and require CI before merging. CI does not apply database migrations.
 
-The separate **Deploy EC2** workflow deploys a successful CI image set over SSH. It defaults to a manual release button; automatic deployment after successful main CI is opt-in. It validates runtime env files and database access, recreates containers behind Caddy HTTPS, and checks the browser-session endpoint. Follow [docs/ec2-deployment.md](docs/ec2-deployment.md) for the required SSH secret, verified host keys, server env files, and runner network access. Database migrations remain manual.
+The separate **Deploy EC2** workflow deploys a successful CI image set over SSH. It defaults to a manual release button; automatic deployment after successful main CI is opt-in. It validates runtime env files and database access, recreates containers behind Caddy HTTPS, and checks the Better Auth session endpoint. Follow [docs/ec2-deployment.md](docs/ec2-deployment.md) for the required SSH secret, verified host keys, server env files, and runner network access. Database migrations remain manual.
 
 ```bash
 bun run check-types
@@ -277,4 +288,4 @@ bun test src
 
 These cover the System Design submission idempotency and revision gating, the graph walk and probe selection, and the evaluation relay (dispatch, Redis-outage durability, reconciliation, retry exhaustion, and the single-owner BullMQ round trip). A production build and a successful local Silero load do not establish live microphone, provider, or Langfuse delivery behavior; verify those with the configured services before deployment.
 
-With the backend, web app, voice agent, and evaluation worker running against a disposable local database, run `bun run scripts/smoke-interview.ts` from the repository root. It submits a minimal System Design diagram, checks an idempotent replay, allocates a real LiveKit session, sends generated test answers through the internal API, verifies the revision challenge, and waits for the queued evaluation. It uses configured LiveKit and model credentials; it does not test microphone audio.
+With the backend, web app, voice agent, and evaluation worker running against a disposable local database, run `bun run scripts/smoke-interview.ts` from the repository root. It creates a verified test account through Better Auth, keeps the session cookie, submits a minimal System Design diagram, checks an idempotent replay, allocates a real LiveKit session, sends generated test answers through the internal API, verifies the revision challenge, waits for the queued evaluation, and deletes the test account. It uses configured LiveKit and model credentials; it does not test microphone audio.

@@ -17,7 +17,8 @@
     "FALKORDB_TEST_GRAPH",
     "RUN_DB_TESTS",
     "BULLMQ_REDIS_URL",
-    "EVALUATION_WORKER_CONCURRENCY"
+    "EVALUATION_WORKER_CONCURRENCY",
+    "BACKEND_URL"
   ],
   "tasks": {
     "@repo/db#build": {
@@ -30,7 +31,7 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "outputs": [".next/**", "!.next/cache/**", "!.next/dev/**"],
-      "env": ["NEXT_PUBLIC_BACKEND_URL"]
+      "env": ["BACKEND_URL"]
     },
     "lint": {
       "dependsOn": ["^lint"],
@@ -41,7 +42,7 @@
         "E2E_SESSION_TOKEN",
         "E2E_SESSION_ROOM",
         "E2E_SERVER_URL",
-        "NEXT_PUBLIC_BACKEND_URL"
+        "BACKEND_URL"
       ]
     },
     "check-types": {
@@ -118,7 +119,7 @@
       "dependsOn": ["^build"],
       "cache": false,
       "persistent": true,
-      "env": ["NEXT_PUBLIC_BACKEND_URL"]
+      "env": ["BACKEND_URL"]
     }
   }
 }

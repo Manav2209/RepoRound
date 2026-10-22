@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { structured, type LlmClient } from "../llm/llm.client.js";
 import type { Evaluation, EvaluationContext } from "./evaluation.types.js";
+import { selectEvaluationTurns } from "./transcript.js";
 
 export const categories = [
   "technicalDepth",
@@ -83,13 +84,39 @@ const average = (values: (number | null | undefined)[]) => {
 export class Evaluator {
   constructor(private readonly llm: LlmClient) {}
   async evaluate(ctx: EvaluationContext): Promise<Evaluation> {
-    const answers = new Map(
+    const originalAnswers = new Map(
       ctx.transcript
         .filter((t) => t.role === "user" && t.text.trim())
         .map((t) => [t.id, t]),
     );
     const extracted = new Map(ctx.candidateEvidence.map((e) => [e.id, e]));
-    const indexedAnswers = [...answers.values()];
+    const overhead = JSON.stringify({
+      projectContext: ctx.projectContext,
+      plan: ctx.plan,
+      github: ctx.github,
+      systemDesign: ctx.systemDesign,
+      questionHistory: ctx.questionHistory,
+      ...(!originalAnswers.size
+        ? { candidateEvidence: ctx.candidateEvidence }
+        : {}),
+    }).length;
+    // Reserve 12k characters for instructions, schema, and validation feedback.
+    const selection = selectEvaluationTurns(
+      [...originalAnswers.values()],
+      ctx.questionHistory,
+      Math.max(0, 48000 - overhead),
+    );
+    const indexedAnswers = selection.turns;
+    const answers = new Map(
+      indexedAnswers.map((t) => [t.id, originalAnswers.get(t.id)!]),
+    );
+    if (originalAnswers.size && !answers.size)
+      return {
+        ...emptyEvaluation(),
+        coverage: selection.coverage,
+        feedback:
+          "The recorded answers exceed the evaluation input budget. No reliable assessment could be produced.",
+      };
     if (!answers.size && !extracted.size) return emptyEvaluation();
     const result = await structured(
       this.llm,
@@ -112,6 +139,12 @@ export class Evaluator {
             "Never cite assistant turns or repository facts. Include a numeric score for every assessed category. " +
             "Only mark a category unassessed if the conversation contains no relevant assessable answer. " +
             "Unexplored objectives and pipeline failures are not weaknesses. Feedback must follow the assessed categories. " +
+            "Coverage describes any omitted or shortened candidate answers. Assess only the supplied excerpts; never infer a weakness from omitted text. " +
+            "When github context is present, separate project comprehension, repository-specific architecture, applied load/failure reasoning, and tradeoff quality. " +
+            "Use objective kind and phase to interpret the question intent. Reward answers that explain component responsibilities and consequences, not repository vocabulary. " +
+            "Do not reward invented code facts, ownership, current bottlenecks, or alternatives the candidate never mentioned. " +
+            "When an explanation refers to repository code, use only the supplied questionHistory repositoryReferences. " +
+            "Treat fewer main or applied questions than the counters target, including an unreached applied block, as an interview coverage limitation rather than a weakness. " +
             "When systemDesign context is present, assess requirements handling, architecture tradeoffs, reliability/scalability reasoning, " +
             "how well the candidate explained their submitted components, their response to the outage challenge, and any actual design changes in revision 2. " +
             "Never invent design changes that revision 2 does not contain; if there is no revision 2, do not penalize the candidate for that. " +
@@ -122,6 +155,8 @@ export class Evaluator {
           content: JSON.stringify({
             projectContext: ctx.projectContext,
             plan: ctx.plan,
+            coverage: selection.coverage,
+            ...(ctx.github ? { github: ctx.github } : {}),
             ...(ctx.systemDesign ? { systemDesign: ctx.systemDesign } : {}),
             candidateAnswers: indexedAnswers.map((answer, answerIndex) => ({
               answerIndex,
@@ -237,10 +272,13 @@ export class Evaluator {
             ? [50, 79, 65]
             : [0, 49, 35];
       item.score = Math.max(min!, Math.min(max!, item.score ?? fallback!));
+      if (selection.coverage.quality === "partial")
+        item.confidence = Math.min(item.confidence, 0.65);
     }
     const scores = result.evidence;
     const evaluation: Evaluation = {
       ...result,
+      coverage: selection.coverage,
       score: average(categories.map((c) => scores[c].score)),
       dimensions: {
         technicalKnowledge: scores.technicalDepth.score ?? null,
@@ -261,6 +299,10 @@ export class Evaluator {
       evaluation.weaknesses = [];
       evaluation.feedback = "Insufficient evidence to evaluate this interview.";
     }
+    if (selection.coverage.quality === "partial")
+      evaluation.feedback =
+        `Partial assessment: ${selection.coverage.omittedTurns} candidate turns omitted and ${selection.coverage.truncatedTurns} shortened for the input budget. ` +
+        evaluation.feedback;
     return evaluation;
   }
 }

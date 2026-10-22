@@ -3,6 +3,10 @@ import { z } from "zod";
 import type { InterviewService } from "../interview/interview.service.js";
 import { getProblem } from "../system-design/problems.js";
 import { getActiveSubmission } from "../system-design/submissions.js";
+import { GithubScraperError } from "../github/github.scraper.js";
+import { serverError } from "./errors.js";
+import { prisma } from "@repo/db";
+import { problemSummary } from "../system-design/problems.js";
 
 const createInterviewSchema = z.union([
   z.object({ githubUrl: z.string().min(1).max(2048) }),
@@ -14,6 +18,38 @@ const createInterviewSchema = z.union([
 
 export function createInterviewsRouter(service: InterviewService): Hono {
   const app = new Hono();
+
+  app.get("/", async (c) => {
+    const interviews = await prisma.interview.findMany({
+      where: { userId: c.get("userId"), status: "completed" },
+      orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
+      take: 20,
+      select: {
+        id: true,
+        mode: true,
+        owner: true,
+        name: true,
+        systemDesignProblemId: true,
+        completedAt: true,
+        evaluation: { select: { score: true } },
+      },
+    });
+    return c.json({
+      reports: interviews.map((interview) => ({
+        interviewId: interview.id,
+        mode: interview.mode,
+        title:
+          interview.mode === "SYSTEM_DESIGN"
+            ? (problemSummary(interview.systemDesignProblemId ?? "")?.title ??
+              "System design interview")
+            : interview.owner && interview.name
+              ? `${interview.owner}/${interview.name}`
+              : "Repository interview",
+        score: interview.evaluation?.score ?? null,
+        completedAt: interview.completedAt,
+      })),
+    });
+  });
 
   app.post("/", async (c) => {
     const body = await c.req.json().catch(() => null);
@@ -41,8 +77,9 @@ export function createInterviewsRouter(service: InterviewService): Hono {
       );
       return c.json({ interviewId: id, mode: "SYSTEM_DESIGN", status }, 201);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return c.json({ error: message }, 400);
+      if (err instanceof GithubScraperError)
+        return c.json({ error: err.message }, 400);
+      return serverError(c, err);
     }
   });
 

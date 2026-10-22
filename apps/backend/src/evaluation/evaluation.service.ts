@@ -123,11 +123,20 @@ export class EvaluationService {
     if (interview.status !== "completing")
       throw new Error("Interview is not ready for evaluation");
     const state = stateSchema.parse(interview.runtime?.data);
-    const turns = await prisma.conversationTurn.findMany({
-      where: { interviewId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: 100,
-    });
+    // Read every page. The evaluator owns explicit, measured model-budget selection.
+    const turns: import("@repo/db").ConversationTurn[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await prisma.conversationTurn.findMany({
+        where: { interviewId },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        take: 100,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      turns.push(...page);
+      if (page.length < 100) break;
+      cursor = page.at(-1)!.id;
+    }
     const candidateIds = new Set(
       turns
         .filter((t) => t.role === "user" && t.analysisStatus === "completed")
@@ -177,33 +186,38 @@ export class EvaluationService {
                     evidence: [],
                   },
             ...(systemDesign ? { systemDesign } : {}),
+            ...(state.github
+              ? {
+                  github: {
+                    segment: state.github.segment,
+                    mainQuestionsAsked: state.github.mainQuestionsAsked,
+                    mainQuestionsTarget: state.github.mainQuestionsTarget,
+                    followUpsAsked: state.github.followUpsAsked,
+                    appliedQuestionsAsked:
+                      state.github.appliedQuestionsAsked,
+                  },
+                }
+              : {}),
             plan: {
               role: interview.interviewPlan?.role ?? "Software Engineer",
               difficulty: state.difficulty,
-              topics: [],
+              topics: [...new Set(state.objectives.map((o) => o.topic))],
               objectives: state.objectives.map((o) => ({
                 id: o.id,
                 topic: o.topic,
                 description: o.description.slice(0, 200),
                 status: o.status,
+                kind: o.kind,
+                phase: o.phase,
               })),
             },
-            transcript: turns
-              .map((t) => ({
-                id: t.id,
-                role:
-                  t.role === "user"
-                    ? ("user" as const)
-                    : ("assistant" as const),
-                text: t.text.slice(0, t.role === "user" ? 2000 : 500),
-                questionId: t.questionId,
-              }))
-              .filter(
-                ((budget) => (turn) => {
-                  budget -= turn.text.length;
-                  return budget >= 0;
-                })(36000),
-              ),
+            transcript: turns.map((t) => ({
+              id: t.id,
+              role:
+                t.role === "user" ? ("user" as const) : ("assistant" as const),
+              text: t.text,
+              questionId: t.questionId,
+            })),
             candidateEvidence: evidence.map((e) => ({
               ...e,
               evidence: e.evidence.slice(0, 220),
@@ -220,7 +234,8 @@ export class EvaluationService {
         )
       : emptyEvaluation();
     await prisma.$transaction(async (tx) => {
-      const data = { ...result, dimensions: { ...result.dimensions } };
+      const { coverage, ...assessment } = result;
+      const data = { ...assessment, dimensions: { ...result.dimensions } };
       await tx.evaluation.upsert({
         where: { interviewId },
         create: { interviewId, ...data },
@@ -248,6 +263,7 @@ export class EvaluationService {
         data: domainEvent(interviewId, "evaluation.completed", {
           score: result.score,
           evidenceCount: evidence.length,
+          ...(coverage ? { coverage } : {}),
         }),
       });
     });
@@ -258,7 +274,11 @@ export class EvaluationService {
     interviewId: string,
     problem: ReturnType<typeof getProblem>,
     state: ReturnType<typeof stateSchema.parse>,
-  ): Promise<NonNullable<import("./evaluation.types.js").EvaluationContext["systemDesign"]>> {
+  ): Promise<
+    NonNullable<
+      import("./evaluation.types.js").EvaluationContext["systemDesign"]
+    >
+  > {
     const submissions = await prisma.systemDesignSubmission.findMany({
       where: { interviewId, graphStatus: "READY" },
       orderBy: { revision: "asc" },

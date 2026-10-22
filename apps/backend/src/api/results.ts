@@ -81,8 +81,16 @@ export function createResultsRouter(): Hono {
       });
     }
 
+    const completed = await prisma.interviewEvent.findFirst({
+      where: { interviewId, type: "evaluation.completed" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { payload: true },
+    });
+    const coverage = (completed?.payload as { coverage?: unknown } | null)
+      ?.coverage;
     return c.json({
       status: evaluation.status,
+      ...(coverage ? { coverage } : {}),
       score: evaluation.score,
       dimensions: evaluation.dimensions as unknown as Record<
         string,
