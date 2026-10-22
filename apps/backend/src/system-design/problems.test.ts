@@ -10,7 +10,7 @@ test("the catalog exposes ten unique, versioned, fully-populated problems", () =
   const ids = PROBLEMS.map((p) => p.id);
   expect(new Set(ids).size).toBe(10);
   for (const problem of PROBLEMS) {
-    expect(problem.version).toBe(1);
+    expect(problem.version).toBe(2);
     expect(problem.title.length).toBeGreaterThan(0);
     expect(problem.brief.length).toBeGreaterThan(0);
     expect(problem.visibleRequirements.length).toBeGreaterThan(0);
@@ -28,10 +28,13 @@ test("ProblemSummary omits internal-only configuration", () => {
   for (const summary of summaries) {
     expect(summary).toEqual({
       id: summary.id,
+      version: summary.version,
       title: summary.title,
       difficulty: summary.difficulty,
       brief: summary.brief,
       visibleRequirements: summary.visibleRequirements,
+      loadAssumption: summary.loadAssumption,
+      constraints: summary.constraints,
     });
   }
 });

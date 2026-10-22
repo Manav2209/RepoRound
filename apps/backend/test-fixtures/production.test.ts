@@ -257,7 +257,14 @@ function publicationFixture(lockBusy: boolean) {
     interviewId: "i1",
     revision: 1,
     graphStatus: "READY",
-    snapshot: snap,
+    snapshot: {
+      ...snap,
+      nodes: snap.nodes.map((node: any, index: number) =>
+        index === 0
+          ? { ...node, data: { ...node.data, label: "Prior web client" } }
+          : node,
+      ),
+    },
     createdAt: new Date(),
   };
   db.interview = {
@@ -327,6 +334,7 @@ function publicationFixture(lockBusy: boolean) {
   return {
     runtime,
     submissions,
+    prior,
     request: {
       requestId: "dc90a706-0f83-4c21-8506-e3e001b39e01",
       expectedRevision: 1,
@@ -432,13 +440,30 @@ test("publication control: absent lease contention, revision 2 is published", as
   expect(f.runtime.data.systemDesign.revisionSubmitted).toBe(true);
 });
 
+test("no-op checkpoint submission returns noChange without a new revision or lock", async () => {
+  const f = publicationFixture(false);
+  f.prior.snapshot = structuredClone(f.request.snapshot);
+  const result = await submitArchitecture({
+    interviewId: "i1",
+    request: f.request,
+  });
+  expect(result).toMatchObject({
+    revision: 1,
+    noChange: true,
+    replayed: false,
+  });
+  expect(f.claims).toBe(0);
+  expect(f.submissions).toEqual([]);
+  expect(f.runtime.data.systemDesign.activeRevision).toBe(1);
+});
+
 test("P2 as reported rejected: parallel edges have unequal hashes but public API rejects both as invalid", async () => {
   const snap = snapshot();
   snap.edges.push({ id: "e2", source: "web", target: "api" });
   const shuffled = { ...snap, edges: [...snap.edges].reverse() };
   expect(snapshotHash(snap)).not.toBe(snapshotHash(shuffled));
   expect(() => normalizeSnapshot(snap)).toThrow("Duplicate edge");
-  const app = createSystemDesignInterviewRouter();
+  const app = createSystemDesignInterviewRouter({} as never);
   for (const input of [snap, shuffled]) {
     const res = await app.request("/i1/design/submissions", {
       method: "POST",

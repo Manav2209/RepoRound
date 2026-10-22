@@ -102,23 +102,154 @@ export const questionRecordSchema = z.object({
   spokenAt: z.string().optional(),
   repositoryReferences: z.array(referenceSchema).optional(),
   kind: questionKindSchema.optional(),
+  revision: z.number().int().positive().optional(),
+  checkpoint: z.boolean().optional(),
+  concern: z
+    .enum([
+      "FLOW",
+      "BOTTLENECK",
+      "STATE",
+      "TRADEOFF",
+      "FAILURE",
+      "CLARIFICATION",
+    ])
+    .optional(),
 });
 export const systemDesignPhaseSchema = z.enum([
   "DESIGN_PENDING",
   "DISCUSSION",
+  "CHECKPOINT",
+  "EDITING",
+  "FAILURE",
+  "FINAL_EDIT",
+  "FINISHED",
   "REVISION_REQUESTED",
   "REVISION_REVIEW",
-  "FINISHED",
 ]);
+const componentKindSchema = z.enum([
+  "client",
+  "load_balancer",
+  "api_service",
+  "database",
+  "cache",
+  "message_queue",
+  "worker",
+  "object_storage",
+  "external_service",
+  "cdn",
+]);
+const sourceTargetSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+});
+const architectureRevisionDiffSchema = z.object({
+  fromRevision: z.number().int().nonnegative(),
+  toRevision: z.number().int().positive(),
+  nodes: z.object({
+    added: z.array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        componentType: componentKindSchema,
+      }),
+    ),
+    removed: z.array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        componentType: componentKindSchema,
+      }),
+    ),
+    relabeled: z.array(
+      z.object({ id: z.string(), before: z.string(), after: z.string() }),
+    ),
+    retyped: z.array(
+      z.object({
+        id: z.string(),
+        before: componentKindSchema,
+        after: componentKindSchema,
+      }),
+    ),
+  }),
+  edges: z.object({
+    added: z.array(sourceTargetSchema),
+    removed: z.array(sourceTargetSchema),
+    reconnected: z.array(
+      z.object({
+        edgeId: z.string(),
+        before: sourceTargetSchema,
+        after: sourceTargetSchema,
+      }),
+    ),
+  }),
+  material: z.boolean(),
+});
+export const systemDesignCheckpointSchema = z.object({
+  id: z.string().max(100),
+  questionId: z.string().max(100),
+  questionRevision: z.number().int().positive(),
+  status: z.enum(["AWAITING_CHOICE", "EDITING", "SUBMITTED", "RESOLVED"]),
+  openedAt: z.string(),
+  resolvedAt: z.string().optional(),
+  choice: z.enum(["CONTINUE", "EDIT"]).optional(),
+  submittedRevision: z.number().int().positive().optional(),
+  afterFailure: z.boolean().default(false),
+});
+export const systemDesignAnswerAssessmentSchema = z.object({
+  questionId: z.string().max(100),
+  turnId: z.string().max(100),
+  revision: z.number().int().positive(),
+  addressedQuestion: z.boolean(),
+  claimedGuaranteeOrTradeoff: z.string().max(300).default(""),
+  unresolvedAssumption: z.string().max(300).optional(),
+  consistentWithDiagram: z.boolean(),
+  strength: z.enum(["WEAK", "MODERATE", "STRONG"]),
+  concern: z.enum([
+    "FLOW",
+    "BOTTLENECK",
+    "STATE",
+    "TRADEOFF",
+    "FAILURE",
+    "CLARIFICATION",
+  ]),
+});
 export const systemDesignStateSchema = z.object({
   problemId: z.string().min(1).max(100),
+  problemVersion: z.number().int().positive().default(1),
+  problemSnapshot: z.object({
+    id: z.string(),
+    version: z.number().int().positive(),
+    title: z.string(),
+    difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
+    brief: z.string(),
+    visibleRequirements: z.array(z.string()),
+    loadAssumption: z.string(),
+    constraints: z.array(z.string()),
+    clarificationAnswers: z.record(z.string(), z.string()),
+    evaluationGoals: z.array(z.string()),
+    challenge: z.object({
+      id: z.string(),
+      prompt: z.string(),
+      targetConcepts: z.array(z.string()),
+    }),
+  }).optional(),
   phase: systemDesignPhaseSchema.default("DISCUSSION"),
   activeRevision: z.number().int().nonnegative().default(0),
   activeSubmissionId: z.string().max(100).optional(),
+  questionsAsked: z.number().int().nonnegative().default(0),
+  questionTarget: z.number().int().min(2).max(4).default(2),
+  clarificationAsked: z.boolean().default(false),
+  failureAsked: z.boolean().default(false),
+  failureAnswerTurnId: z.string().max(100).optional(),
   challengeIssued: z.boolean().default(false),
   revisionSubmitted: z.boolean().default(false),
   probesAsked: z.array(z.string()).default([]),
   selectedProbeIds: z.array(z.string()).default([]),
+  checkpoint: systemDesignCheckpointSchema.optional(),
+  checkpoints: z.array(systemDesignCheckpointSchema).max(10).default([]),
+  answerAssessments: z.array(systemDesignAnswerAssessmentSchema).max(12).default([]),
+  pendingQuestionId: z.string().max(100).optional(),
+  lastRevisionDiff: architectureRevisionDiffSchema.optional(),
 });
 export type SystemDesignState = z.infer<typeof systemDesignStateSchema>;
 
@@ -349,22 +480,35 @@ export function initialState(
 
 export function initialSystemDesignState(input: {
   problemId: string;
-  activeRevision: number;
-  activeSubmissionId: string;
+  problemSnapshot?: import("@repo/voice-types").ProblemConfig;
+  problemVersion?: number;
+  activeRevision?: number;
+  activeSubmissionId?: string;
   objectives: unknown;
   difficulty?: string;
+  phase?: "DESIGN_PENDING" | "DISCUSSION";
 }): InterviewState {
   return {
     mode: "SYSTEM_DESIGN",
     systemDesign: {
       problemId: input.problemId,
-      phase: "DISCUSSION",
-      activeRevision: input.activeRevision,
+      problemSnapshot: input.problemSnapshot,
+      problemVersion: input.problemVersion ?? 1,
+      phase:
+        input.phase ??
+        (input.activeSubmissionId ? "DISCUSSION" : "DESIGN_PENDING"),
+      activeRevision: input.activeRevision ?? 0,
       activeSubmissionId: input.activeSubmissionId,
+      questionsAsked: 0,
+      questionTarget: 2,
+      clarificationAsked: false,
+      failureAsked: false,
       challengeIssued: false,
       revisionSubmitted: false,
       probesAsked: [],
       selectedProbeIds: [],
+      checkpoints: [],
+      answerAssessments: [],
     },
     phase: "ARCHITECTURE",
     difficulty:

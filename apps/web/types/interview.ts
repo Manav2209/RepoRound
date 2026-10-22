@@ -110,18 +110,53 @@ export interface ArchitectureSnapshot {
 
 export interface ProblemSummary {
   id: string;
+  version: number;
   title: string;
   difficulty: "EASY" | "MEDIUM" | "HARD";
   brief: string;
   visibleRequirements: string[];
+  loadAssumption: string;
+  constraints: string[];
 }
+
+export type SystemDesignPhase =
+  | "DESIGN_PENDING"
+  | "DISCUSSION"
+  | "CHECKPOINT"
+  | "EDITING"
+  | "FAILURE"
+  | "FINAL_EDIT"
+  | "FINISHED"
+  | "REVISION_REQUESTED"
+  | "REVISION_REVIEW";
+
+export type SystemDesignCheckpointStatus =
+  | "AWAITING_CHOICE"
+  | "EDITING"
+  | "SUBMITTED"
+  | "RESOLVED";
 
 export interface DesignView {
   interviewId: string;
   mode: "SYSTEM_DESIGN";
+  status: string;
   problem: ProblemSummary | null;
   activeRevision: number;
   revisionAllowed: boolean;
+  phase: SystemDesignPhase | null;
+  deadlineAt: string | null;
+  remainingSeconds: number;
+  questionCount: number;
+  questionTarget: number;
+  checkpoint: {
+    id: string;
+    questionId: string;
+    questionRevision: number;
+    status: SystemDesignCheckpointStatus;
+    choice?: "CONTINUE" | "EDIT";
+    submittedRevision?: number;
+    afterFailure: boolean;
+  } | null;
   submission: {
     submissionId: string;
     revision: number;
@@ -136,4 +171,5 @@ export interface DesignSubmissionResult {
   revision: number;
   graphStatus: "BUILDING" | "READY" | "FAILED";
   next: "START_INTERVIEW" | "RESUME_INTERVIEW";
+  noChange: boolean;
 }

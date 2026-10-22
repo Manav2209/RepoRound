@@ -48,6 +48,7 @@ export default defineAgent({
     let questionId: string | undefined;
     let ended = false;
     let closing = false;
+    let turnProcessing = false;
     const close = async () => {
       if (closing) return;
       closing = true;
@@ -78,22 +79,27 @@ export default defineAgent({
         nextQuestion: async (turnId, answer) => {
           if (ended) return "This interview has ended. Thank you.";
           if (!questionId) throw new Error("Opening question is not ready");
-          const next = await gateway.processTurn(
-            interviewId,
-            sessionId,
-            turnId,
-            questionId,
-            answer,
-          );
-          ended = next.ended;
-          if (ended) conductor.setNextQuestionId(null);
-          if (next.questionId) {
-            questionId = next.questionId;
-            conductor.setNextQuestionId(questionId);
+          turnProcessing = true;
+          try {
+            const next = await gateway.processTurn(
+              interviewId,
+              sessionId,
+              turnId,
+              questionId,
+              answer,
+            );
+            ended = next.ended;
+            if (ended) conductor.setNextQuestionId(null);
+            if (next.questionId) {
+              questionId = next.questionId;
+              conductor.setNextQuestionId(questionId);
+            }
+            return ended
+              ? "Thank you for sharing your project. This concludes the interview."
+              : next.question!;
+          } finally {
+            turnProcessing = false;
           }
-          return ended
-            ? "Thank you for sharing your project. This concludes the interview."
-            : next.question!;
         },
         onResponseError: (reason) => session.markResponseError(reason),
       }),
@@ -105,6 +111,7 @@ export default defineAgent({
     if (questionId) conductor.setNextQuestionId(questionId);
     await session.start({ room: ctx.room });
     let checking = false;
+    let polling = false;
     const monitor = setInterval(() => {
       if (checking || closing) return;
       checking = true;
@@ -128,8 +135,36 @@ export default defineAgent({
           checking = false;
         });
     }, 10_000);
+    const pendingPoll = setInterval(() => {
+      if (polling || closing || ended || turnProcessing) return;
+      polling = true;
+      void gateway
+        .pendingQuestion(interviewId, sessionId)
+        .then(async (pending) => {
+          if (pending.ended || turnProcessing || closing || ended) return;
+          if (
+            pending.questionId &&
+            pending.question &&
+            pending.questionId !== questionId
+          ) {
+            questionId = pending.questionId;
+            conductor.setNextQuestionId(questionId);
+            await session.say(pending.question, false);
+          }
+        })
+        .catch((err: unknown) =>
+          logger.warn(
+            { error: String(err) },
+            "Pending question check failed",
+          ),
+        )
+        .finally(() => {
+          polling = false;
+        });
+    }, 2_500);
     ctx.addShutdownCallback(async () => {
       clearInterval(monitor);
+      clearInterval(pendingPoll);
       await session.close().catch(() => {});
       await conductor.flush();
     });

@@ -1,4 +1,13 @@
+import type { ArchitectureRevisionDiff, ProblemConfig } from "@repo/voice-types";
+
 export type InterviewDifficulty = "EASY" | "MEDIUM" | "HARD" | "EXPERT";
+export type SystemDesignConcern =
+  | "FLOW"
+  | "BOTTLENECK"
+  | "STATE"
+  | "TRADEOFF"
+  | "FAILURE"
+  | "CLARIFICATION";
 export type InterviewQuestionKind =
   | "OPENING"
   | "REPOSITORY"
@@ -115,6 +124,9 @@ export interface QuestionRecord {
   repositoryReferences?: RepositoryReference[];
   spokenAt?: string;
   kind?: InterviewQuestionKind;
+  revision?: number;
+  checkpoint?: boolean;
+  concern?: SystemDesignConcern;
 }
 
 export interface AnswerAssessment {
@@ -130,19 +142,65 @@ export interface AnswerAssessment {
 export type SystemDesignPhase =
   | "DESIGN_PENDING"
   | "DISCUSSION"
+  | "CHECKPOINT"
+  | "EDITING"
+  | "FAILURE"
+  | "FINAL_EDIT"
+  | "FINISHED"
   | "REVISION_REQUESTED"
-  | "REVISION_REVIEW"
-  | "FINISHED";
+  | "REVISION_REVIEW";
+
+export type SystemDesignCheckpointStatus =
+  | "AWAITING_CHOICE"
+  | "EDITING"
+  | "SUBMITTED"
+  | "RESOLVED";
+
+export interface SystemDesignCheckpoint {
+  id: string;
+  questionId: string;
+  questionRevision: number;
+  status: SystemDesignCheckpointStatus;
+  openedAt: string;
+  resolvedAt?: string;
+  choice?: "CONTINUE" | "EDIT";
+  submittedRevision?: number;
+  afterFailure: boolean;
+}
+
+export interface SystemDesignAnswerAssessment {
+  questionId: string;
+  turnId: string;
+  revision: number;
+  addressedQuestion: boolean;
+  claimedGuaranteeOrTradeoff: string;
+  unresolvedAssumption?: string;
+  consistentWithDiagram: boolean;
+  strength: "WEAK" | "MODERATE" | "STRONG";
+  concern: SystemDesignConcern;
+}
 
 export interface SystemDesignInterviewState {
   problemId: string;
+  problemSnapshot?: ProblemConfig;
+  problemVersion: number;
   phase: SystemDesignPhase;
   activeRevision: number;
   activeSubmissionId?: string;
+  questionsAsked: number;
+  questionTarget: number;
+  clarificationAsked: boolean;
+  failureAsked: boolean;
+  failureAnswerTurnId?: string;
   challengeIssued: boolean;
   revisionSubmitted: boolean;
   probesAsked: string[];
   selectedProbeIds: string[];
+  checkpoint?: SystemDesignCheckpoint;
+  checkpoints: SystemDesignCheckpoint[];
+  answerAssessments: SystemDesignAnswerAssessment[];
+  pendingQuestionId?: string;
+  lastRevisionDiff?: ArchitectureRevisionDiff;
 }
 
 export interface InterviewState {

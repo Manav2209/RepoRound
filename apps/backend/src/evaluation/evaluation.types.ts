@@ -73,14 +73,50 @@ export interface EvaluationContext {
   }[];
   systemDesign?: {
     problemTitle: string;
+    problemVersion: number;
     brief: string;
     requirements: string[];
+    loadAssumption: string;
+    constraints: string[];
     challenge: string;
     probesAsked: string[];
     challengeIssued: boolean;
     revisionSubmitted: boolean;
-    revision1: { nodes: number; edges: number; components: string[] };
-    revision2?: { nodes: number; edges: number; components: string[] };
+    questionCount: number;
+    questionTarget: number;
+    failureAsked: boolean;
+    revisions: {
+      revision: number;
+      nodeCount: number;
+      edgeCount: number;
+      nodes: {
+        id: string;
+        label: string;
+        componentType: string;
+      }[];
+      edges: {
+        source: { id: string; label: string };
+        target: { id: string; label: string };
+      }[];
+      diff?: import("@repo/voice-types").ArchitectureRevisionDiff;
+    }[];
+    answerAssessments: {
+      questionId: string;
+      revision: number;
+      strength: string;
+      concern: string;
+      addressedQuestion: boolean;
+      consistentWithDiagram: boolean;
+      claimedGuaranteeOrTradeoff: string;
+      unresolvedAssumption?: string;
+    }[];
+    checkpoints: {
+      questionId: string;
+      status: string;
+      afterFailure: boolean;
+      choice?: string;
+      submittedRevision?: number;
+    }[];
   };
   candidateEvidence: import("../interview/interview.types.js").CandidateEvidence[];
   claims?: import("../interview/interview.types.js").CandidateClaim[];

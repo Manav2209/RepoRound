@@ -12,7 +12,11 @@ import type {
   ArchitectureSnapshot,
   SubmitArchitectureRequest,
 } from "@repo/voice-types";
-import { SubmissionError, submitArchitecture } from "./submissions.js";
+import {
+  reconcileDesignGraph,
+  SubmissionError,
+  submitArchitecture,
+} from "./submissions.js";
 import {
   setDesignGraphStore,
   type ComponentFact,
@@ -56,8 +60,12 @@ class FakeGraphStore implements DesignGraphStore {
     };
   }
 
-  async components(): Promise<ComponentFact[]> {
-    return [];
+  async components(submissionId: string): Promise<ComponentFact[]> {
+    return (this.snapshots.get(submissionId)?.nodes ?? []).map((node) => ({
+      componentId: node.id,
+      kind: node.data.componentType,
+      label: node.data.label,
+    }));
   }
   async upstreamPaths(): Promise<UpstreamFact[]> {
     return [];
@@ -65,8 +73,19 @@ class FakeGraphStore implements DesignGraphStore {
   async queueWorkerPairs(): Promise<QueueWorkerFact[]> {
     return [];
   }
-  async edges(): Promise<EdgeFact[]> {
-    return [];
+  async edges(submissionId: string): Promise<EdgeFact[]> {
+    const snapshot = this.snapshots.get(submissionId);
+    if (!snapshot) return [];
+    const kinds = new Map(
+      snapshot.nodes.map((node) => [node.id, node.data.componentType]),
+    );
+    return snapshot.edges.map((edge) => ({
+      edgeId: edge.id,
+      sourceId: edge.source,
+      sourceKind: kinds.get(edge.source) ?? "unknown",
+      targetId: edge.target,
+      targetKind: kinds.get(edge.target) ?? "unknown",
+    }));
   }
   async isolatedComponents(): Promise<IsolatedFact[]> {
     return [];
@@ -157,7 +176,7 @@ suite("mode branching", async () => {
 });
 
 suite(
-  "a minimal design reaches its challenge after exhausting distinct probes",
+  "a minimal design offers checkpoints and ends its questions with the failure scenario",
   async () => {
     const interviewId = await newInterview("SYSTEM_DESIGN");
     const problem = getProblem("url-shortener")!;
@@ -197,34 +216,127 @@ suite(
     } as unknown as LlmClient;
     const orchestrator = new InterviewOrchestrator(llm);
     let response = await orchestrator.start(interviewId, session.id);
-    for (let index = 0; index < 3; index++) {
+    for (let index = 0; index < 6; index++) {
       if (response.ended)
         throw new Error("Interview ended before its challenge");
-      response = await orchestrator.processTurn({
+      await orchestrator.processTurn({
         interviewId,
         sessionId: session.id,
         turnId: newId("test-turn"),
         questionId: response.questionId,
-        text: "The API accepts the request and stores its result.",
+        text: "The API accepts the request and stores its result. The database keeps a durable record, while a cache handles repeated reads. I would watch the hot keys, add replicas for reads, and retry safely after failures so that accepted requests are not lost.",
       });
       const runtime = await prisma.interviewRuntime.findUniqueOrThrow({
         where: { interviewId },
       });
       const current = stateSchema.parse(runtime.data);
-      if (current.systemDesign?.challengeIssued) break;
+      const checkpoint = current.systemDesign?.checkpoint;
+      expect(checkpoint?.status).toBe("AWAITING_CHOICE");
+      await orchestrator.resolveCheckpoint(
+        interviewId,
+        checkpoint!.id,
+        "CONTINUE",
+      );
+      response = await orchestrator.start(interviewId, session.id);
+      const advanced = await prisma.interviewRuntime.findUniqueOrThrow({
+        where: { interviewId },
+      });
+      if (stateSchema.parse(advanced.data).systemDesign?.challengeIssued) break;
     }
     const runtime = await prisma.interviewRuntime.findUniqueOrThrow({
       where: { interviewId },
     });
     const current = stateSchema.parse(runtime.data);
-    expect(current.systemDesign?.phase).toBe("REVISION_REQUESTED");
+    expect(current.systemDesign?.phase).toBe("FAILURE");
     expect(current.systemDesign?.challengeIssued).toBe(true);
     expect(current.questions.at(-1)?.text).toContain(problem.challenge.prompt);
-    expect(current.systemDesign?.selectedProbeIds).toEqual([
+    expect(current.systemDesign?.selectedProbeIds).toContain(
       "generic.scaling-fallback",
-    ]);
+    );
   },
 );
+
+suite("a revised diagram grounds the next spoken question", async () => {
+  const interviewId = await newInterview("SYSTEM_DESIGN");
+  const problem = getProblem("url-shortener")!;
+  await prisma.interview.update({
+    where: { id: interviewId },
+    data: { systemDesignProblemId: problem.id },
+  });
+  const first = await submitArchitecture({
+    interviewId,
+    request: request(crypto.randomUUID(), 0),
+  });
+  const state = initialSystemDesignState({
+    problemId: problem.id,
+    problemSnapshot: problem,
+    activeRevision: 1,
+    activeSubmissionId: first.submissionId,
+    objectives: objectivesForProblem(problem),
+  });
+  state.systemDesign!.questionTarget = 3;
+  state.systemDesign!.clarificationAsked = true;
+  await prisma.interview.update({
+    where: { id: interviewId },
+    data: { status: "active" },
+  });
+  await prisma.interviewRuntime.create({
+    data: {
+      interviewId,
+      data: state as unknown as Prisma.InputJsonValue,
+      deadlineAt: new Date(Date.now() + 10 * 60_000),
+    },
+  });
+  const session = await prisma.interviewSession.create({
+    data: {
+      interviewId,
+      roomName: `test-${interviewId}`,
+      serverUrl: "ws://localhost:7880",
+      status: "active",
+    },
+  });
+  const llm = {
+    async completeJson() {
+      throw new Error("test fallback");
+    },
+  } as unknown as LlmClient;
+  const orchestrator = new InterviewOrchestrator(llm);
+  const opening = await orchestrator.start(interviewId, session.id);
+  if (opening.ended) throw new Error("Opening question missing");
+  await orchestrator.processTurn({
+    interviewId,
+    sessionId: session.id,
+    turnId: newId("test-turn"),
+    questionId: opening.questionId,
+    text: "A client sends a short link request to the API. The API validates it and returns a code. I would store the mapping durably and cache popular redirects to keep reads fast. A retry should preserve the same mapping so users do not receive two different links for one request.",
+  });
+  const checkpointRow = await prisma.interviewRuntime.findUniqueOrThrow({
+    where: { interviewId },
+  });
+  const checkpoint = stateSchema.parse(checkpointRow.data).systemDesign?.checkpoint;
+  expect(checkpoint?.status).toBe("AWAITING_CHOICE");
+  await orchestrator.resolveCheckpoint(interviewId, checkpoint!.id, "EDIT");
+  const revised = snapshot();
+  revised.nodes.push({
+    id: "db",
+    position: { x: 400, y: 0 },
+    data: { componentType: "database", label: "Link Store" },
+  });
+  revised.edges.push({ id: "e2", source: "api", target: "db" });
+  const second = await submitArchitecture({
+    interviewId,
+    request: request(crypto.randomUUID(), 1, revised),
+  });
+  expect(second.revision).toBe(2);
+  await orchestrator.continueAfterCheckpoint(interviewId, checkpoint!.id);
+  const next = await orchestrator.start(interviewId, session.id);
+  if (next.ended) throw new Error("Next diagram question missing");
+  expect(next.question).toContain("Link Store");
+  const finalRuntime = await prisma.interviewRuntime.findUniqueOrThrow({
+    where: { interviewId },
+  });
+  expect(stateSchema.parse(finalRuntime.data).questions.at(-1)?.revision).toBe(2);
+});
 
 suite("submission idempotency", async () => {
   const interviewId = await newInterview("SYSTEM_DESIGN");
@@ -288,38 +400,40 @@ suite(
 );
 
 suite(
-  "graph outage fails the submission and the same request can recover",
+  "graph outage keeps the canonical submission active and later repairs the projection",
   async () => {
     const interviewId = await newInterview("SYSTEM_DESIGN");
     const requestId = crypto.randomUUID();
     const before = store.installs.length;
 
     store.fail = true;
-    let status = 0;
-    try {
-      await submitArchitecture({ interviewId, request: request(requestId, 0) });
-    } catch (err) {
-      status = err instanceof SubmissionError ? err.status : -1;
-    }
-    store.fail = false;
-    expect(status).toBe(503);
-
-    const failed = await prisma.systemDesignSubmission.findFirst({
-      where: { interviewId },
-    });
-    expect(failed?.graphStatus).toBe("FAILED");
-
-    const recovered = await submitArchitecture({
+    const submitted = await submitArchitecture({
       interviewId,
       request: request(requestId, 0),
     });
-    expect(recovered.graphStatus).toBe("READY");
-    expect(recovered.revision).toBe(1);
+    const degraded = await prisma.systemDesignSubmission.findFirst({
+      where: { interviewId },
+    });
+    expect(submitted.graphStatus).toBe("READY");
+    expect(degraded?.graphStatus).toBe("READY");
+    expect(degraded?.graphError).toContain("simulated FalkorDB outage");
+
+    const replayed = await submitArchitecture({
+      interviewId,
+      request: request(requestId, 0),
+    });
+    expect(replayed.submissionId).toBe(submitted.submissionId);
+    store.fail = false;
+    await reconcileDesignGraph();
+    const repaired = await prisma.systemDesignSubmission.findUniqueOrThrow({
+      where: { id: submitted.submissionId },
+    });
+    expect(repaired.graphError).toBeNull();
     expect(store.installs.length).toBe(before + 1);
   },
 );
 
-suite("revision 2 is gated on the interviewer requesting one", async () => {
+suite("revision 2 is gated on an edit checkpoint", async () => {
   const interviewId = await newInterview("SYSTEM_DESIGN");
   const first = await submitArchitecture({
     interviewId,
@@ -366,6 +480,15 @@ suite("revision 2 is gated on the interviewer requesting one", async () => {
   }
   expect(denied).toBe(409);
 
+  const checkpoint = {
+    id: newId("cp"),
+    questionId: newId("q"),
+    questionRevision: 1,
+    status: "EDITING" as const,
+    openedAt: new Date().toISOString(),
+    choice: "EDIT" as const,
+    afterFailure: false,
+  };
   await prisma.interviewRuntime.update({
     where: { interviewId },
     data: {
@@ -373,11 +496,22 @@ suite("revision 2 is gated on the interviewer requesting one", async () => {
         ...baseState,
         systemDesign: {
           ...baseState.systemDesign,
-          phase: "REVISION_REQUESTED",
+          phase: "EDITING",
+          checkpoint,
+          checkpoints: [checkpoint],
         },
       },
     },
   });
+
+  const movedOnly = snapshot();
+  movedOnly.nodes[0]!.position = { x: 900, y: 400 };
+  const noChange = await submitArchitecture({
+    interviewId,
+    request: request(crypto.randomUUID(), 1, movedOnly),
+  });
+  expect(noChange.noChange).toBe(true);
+  expect(noChange.revision).toBe(1);
 
   const revised = await submitArchitecture({
     interviewId,

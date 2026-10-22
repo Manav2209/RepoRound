@@ -13,7 +13,7 @@ A repository-aware technical interviewer with a cascaded voice pipeline and a du
 
 The backend owns interview progression. Models extract information and generate questions; application code controls phases, objectives, difficulty, deadlines, and state changes. The voice worker speaks backend questions and cancels playback locally when candidate speech interrupts it.
 
-Two interview modes are supported. **GitHub** mode is repository-aware: the candidate discusses a repository and claims are checked against indexed source. **System Design** mode presents an immutable component-graph canvas: the candidate submits an architecture snapshot that is persisted in PostgreSQL and projected into a FalkorDB property graph, then the interviewer probes it along ordered graph paths and issues a scripted failure challenge before allowing one optional revision.
+Two interview modes are supported. **GitHub** mode is repository-aware: the candidate discusses a repository and claims are checked against indexed source. **System Design** mode presents an immutable component-graph canvas: the candidate submits an architecture snapshot that is persisted in PostgreSQL and projected into a FalkorDB property graph, then the interviewer asks two or three diagram-grounded questions. After every answer the candidate can submit a new checkpoint-scoped revision or continue with the active one. The prepared failure scenario is always the last substantive question, followed by one optional final edit.
 
 The implementation specification is in [spec/improvement-spec.md](spec/improvement-spec.md). Its October 1 delivery decisions supersede the original first-release scope.
 
@@ -41,7 +41,7 @@ Claim verification checks whether fetched code supports or contradicts a factual
 
 - Objective plans replace static question banks. Each question records its objective, phase, difficulty, reason, and code references when available.
 - Final answers are persisted before reasoning. Stable turn IDs deduplicate retries. Runtime leases and version checks serialize state changes across backend processes.
-- The clock starts when the voice session is allocated. It survives reconnects and worker restarts.
+- A GitHub interview clock starts when the voice session is allocated. A System Design clock starts when the interview is created, and reconnect or transient startup gaps before the voice session are credited back. Both survive worker restarts.
 - Session allocation is serialized in PostgreSQL. The session row exists before LiveKit dispatch.
 - Disconnects allow a configured reconnect window. Heartbeats detect stale workers. Reconnecting restores the pending question and persisted transcript.
 - The browser End action immediately stops further progression. Finalization and evaluation use unique durable job keys, expiring leases, and bounded retries.
@@ -63,7 +63,7 @@ Repository text and candidate answers are untrusted data. All structured model o
 
 ## System Design graph (FalkorDB)
 
-System Design mode uses FalkorDB as its topology layer. PostgreSQL remains the source of truth for the interview and the submitted snapshot; the graph is a rebuildable projection used to choose questions. Each accepted canvas snapshot is installed under an immutable `submissionId`, so revision 1 and revision 2 never share nodes or edges. The GitHub repository graph described above is a separate, in-memory evidence-only structure and is not stored in FalkorDB.
+System Design mode uses FalkorDB as its topology layer. PostgreSQL remains the source of truth for the interview and the submitted snapshot; the graph is a rebuildable projection used to choose questions. Each accepted canvas snapshot is installed under an immutable `submissionId`, so no two revisions share nodes or edges. The GitHub repository graph described above is a separate, in-memory evidence-only structure and is not stored in FalkorDB.
 
 ### Data model
 
@@ -86,7 +86,8 @@ System Design mode uses FalkorDB as its topology layer. PostgreSQL remains the s
 1. A submitted snapshot is stored in `SystemDesignSubmission` with `graphStatus = BUILDING`.
 2. The backend installs the snapshot: any existing nodes for that `submissionId` are detached and deleted, then nodes and edges are created.
 3. Verification counts nodes and edges and asserts there are no cross-submission edges. A mismatch marks the submission `FAILED` and returns `503`; replaying the same `requestId` rebuilds a failed submission.
-4. Only `READY` submissions are read by the interviewer. Revision 1 is required to start; at most one optional revision 2 is allowed.
+4. Only `READY` submissions are read by the interviewer. Revision 1 starts the discussion. After each substantive answer the candidate can submit one revision for that checkpoint and then continue; every revision is independently installed and diffed for evaluation.
+5. The timer starts when the interview row is created. Voice-session startup and reconnect gaps are credited back, and the interview reserves time for the failure scenario and final edit.
 
 ### Cypher queries the product depends on
 
@@ -149,10 +150,11 @@ The hop bound in the traversal is clamped to `1..5` and interpolated into the qu
 ### Algorithms
 
 - **Ordered path search** (`findOrderedPath`): bounded, cycle-safe DFS over the graph facts. It finds a directed path whose visited nodes match a requested kind sequence while allowing unrelated intermediate nodes. The interviewer uses `api_service → message_queue → worker`, `api_service → database`, and `worker → external_service`.
-- **Deterministic probe selection** (`selectProbe`): application policy, not an LLM tool loop. It prefers a topology-specific probe, skips probe IDs already asked, and falls back to an arrow-direction or general scaling question when the graph is minimal. After three probes the interview issues the scripted failure challenge.
-- **Explainability**: every probe records `probeId`, `submissionId`, `revision`, `referencedComponentIds`, `graphPath`, and a human-readable `reason`; the selected probe is also written to `system_design.probe` interview events. Question wording is generated from those facts, so a follow-up can be traced back to the exact path in the submitted graph.
+- **Deterministic probe selection** (`selectProbe`): application policy, not an LLM tool loop. It prefers a topology-specific probe, skips probe IDs already asked, and falls back to an arrow-direction or general scaling question when the graph is minimal. Question planning is two or three substantive questions: an opening question, at most one optional non-failure probe, and the scripted failure challenge last.
+- **Checkpoint flow**: each substantive answer records an assessment and opens a checkpoint. The backend speaks a checkpoint prompt, and the canvas either edits and republishes or continues. A checkpoint resolves only when the active revision is `READY`; an unchanged snapshot is a no-op. At most one targeted clarification is allowed, and it never counts as an additional substantive question.
+- **Explainability**: every probe records `probeId`, `submissionId`, `revision`, `referencedComponentIds`, `graphPath`, and a human-readable `reason`; the selected probe is also written to `system_design.probe` interview events. Question wording is generated from those facts, and accepted revisions are compared with a deterministic node/edge diff, so evaluation can trace how the architecture changed.
 
-Configuration: `FALKORDB_HOST` (default `localhost`), `FALKORDB_PORT` (default `6379`), and `FALKORDB_GRAPH` (default `ai_interviewer`). Read queries use a 400 ms timeout and writes a 5 s timeout; a failed connection is reset and re-established on the next call.
+Configuration: `FALKORDB_HOST` (default `localhost`), `FALKORDB_PORT` (default `6379`), `FALKORDB_GRAPH` (default `ai_interviewer`), and `SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES` (default `15`, clamped to `10-15`). Read queries use a 400 ms timeout and writes a 5 s timeout; a failed connection is reset and re-established on the next call.
 
 ## Evaluation
 

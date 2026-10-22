@@ -1,4 +1,5 @@
 import { Prisma, prisma } from "@repo/db";
+import type { SelectedProbe } from "@repo/voice-types";
 import { RepositoryKnowledge } from "../github/knowledge.js";
 import { newId } from "../lib/ids.js";
 import type { LlmClient } from "../llm/llm.client.js";
@@ -21,25 +22,19 @@ import type {
   QuestionRecord,
 } from "./interview.types.js";
 import { getProblem } from "../system-design/problems.js";
-import {
-  activeRevision,
-  getActiveSubmission,
-  getReadySubmissionByRevision,
-} from "../system-design/submissions.js";
+import { getActiveSubmission } from "../system-design/submissions.js";
 import { designGraphStore } from "../system-design/graph.js";
 import { gatherProbeContext, selectProbe } from "../system-design/probes.js";
 import {
-  challengeQuestion,
-  componentsFromSnapshot,
-  detectRevisionDecision,
+  assessSystemDesignAnswer,
+  checkpointPrompt,
+  clarificationQuestion,
+  failureQuestion,
   introQuestion,
-  nudgeQuestion,
   phraseProbeQuestion,
-  phraseRevisionReview,
 } from "./strategies/system-design.js";
+import type { SystemDesignCheckpoint } from "./interview.types.js";
 export { selectObjective } from "./policies.js";
-
-const MAX_SD_PROBES = 3;
 
 const DIFFICULTIES: InterviewDifficulty[] = [
   "EASY",
@@ -94,6 +89,236 @@ export class InterviewOrchestrator {
         }
       : { ended: true };
   }
+  private pushSystemDesignQuestion(
+    state: InterviewState,
+    question: QuestionRecord,
+    turnId?: string,
+  ): void {
+    const sd = state.systemDesign;
+    if (!sd) throw new Error("System design interview state is missing");
+    state.questions.push({ ...question, sourceTurnId: turnId });
+    if (turnId) state.processedTurns[turnId] = question.id;
+    sd.pendingQuestionId = question.id;
+    if (!question.checkpoint && question.concern !== "CLARIFICATION") {
+      sd.questionsAsked += 1;
+      if (question.concern === "FAILURE") {
+        sd.failureAsked = true;
+        sd.challengeIssued = true;
+      }
+    }
+  }
+  private openCheckpoint(
+    state: InterviewState,
+    question: QuestionRecord,
+    afterFailure: boolean,
+    turnId: string,
+  ): void {
+    const sd = state.systemDesign;
+    if (!sd) throw new Error("System design interview state is missing");
+    const prompt = checkpointPrompt(state, { afterFailure });
+    const checkpoint: SystemDesignCheckpoint = {
+      id: newId("cp"),
+      questionId: prompt.id,
+      questionRevision: question.revision ?? sd.activeRevision,
+      status: "AWAITING_CHOICE",
+      openedAt: new Date().toISOString(),
+      afterFailure,
+    };
+    sd.checkpoint = checkpoint;
+    sd.checkpoints.push(checkpoint);
+    sd.phase = afterFailure ? "FINAL_EDIT" : "CHECKPOINT";
+    this.pushSystemDesignQuestion(state, prompt, turnId);
+  }
+  private finishSystemDesign(state: InterviewState, turnId?: string): void {
+    const sd = state.systemDesign;
+    if (!sd) throw new Error("System design interview state is missing");
+    state.ended = true;
+    state.endReason = "objectives_completed";
+    sd.phase = "FINISHED";
+    sd.pendingQuestionId = undefined;
+    if (turnId) state.processedTurns[turnId] = "END";
+    transition(state, "FINAL");
+  }
+  private async askNextSystemDesign(
+    input: {
+      interviewId: string;
+      state: InterviewState;
+      problem: NonNullable<ReturnType<typeof getProblem>>;
+      checkpoint: SystemDesignCheckpoint;
+      deadlineAt: Date;
+      turnId?: string;
+      events: ReturnType<typeof domainEvent>[];
+    },
+  ): Promise<void> {
+    const { state, problem, checkpoint, deadlineAt, turnId, events } = input;
+    const sd = state.systemDesign;
+    if (!sd) throw new Error("System design interview state is missing");
+    checkpoint.status = "RESOLVED";
+    checkpoint.resolvedAt = new Date().toISOString();
+    if (checkpoint.afterFailure || deadlineAt <= new Date()) {
+      this.finishSystemDesign(state, turnId);
+      return;
+    }
+    const active = await getActiveSubmission(input.interviewId);
+    if (!active) {
+      this.finishSystemDesign(state, turnId);
+      return;
+    }
+    const lastAssessment = sd.answerAssessments.at(-1);
+    const needsClarification =
+      !sd.clarificationAsked &&
+      !sd.failureAsked &&
+      lastAssessment !== undefined &&
+      (!lastAssessment.addressedQuestion ||
+        lastAssessment.strength === "WEAK" ||
+        !lastAssessment.consistentWithDiagram) &&
+      deadlineAt.getTime() - Date.now() > 4 * 60_000;
+    if (needsClarification && lastAssessment) {
+      const previous = state.questions.find(
+        (q) => q.id === lastAssessment.questionId,
+      );
+      sd.clarificationAsked = true;
+      sd.phase = "DISCUSSION";
+      const question = await clarificationQuestion({
+        llm: this.llm,
+        interviewId: input.interviewId,
+        problem,
+        state,
+        question: previous ?? failureQuestion(state, problem),
+        claimedGuaranteeOrTradeoff:
+          lastAssessment.claimedGuaranteeOrTradeoff,
+        unresolvedAssumption: lastAssessment.unresolvedAssumption,
+      });
+      this.pushSystemDesignQuestion(state, question, turnId);
+    } else if (
+      !sd.failureAsked &&
+      (sd.questionsAsked >= sd.questionTarget - 1 ||
+        deadlineAt.getTime() - Date.now() < 3 * 60_000)
+    ) {
+      sd.phase = "FAILURE";
+      sd.questionTarget = sd.questionsAsked + 1;
+      const question = failureQuestion(state, problem);
+      this.pushSystemDesignQuestion(state, question, turnId);
+    } else if (!sd.failureAsked) {
+      try {
+        if (active.graphError)
+          throw new Error("Design graph projection is pending repair");
+        const store = designGraphStore();
+        const ctx = await gatherProbeContext({
+          problem,
+          submissionId: active.submissionId,
+          revision: active.revision,
+          store,
+          askedProbeIds: sd.probesAsked,
+        });
+        let probe = selectProbe(ctx);
+        const excluded = [...sd.probesAsked];
+        for (let i = 0; i < 6; i += 1) {
+          if (!/outage|failure|third-party|latency/.test(probe.probeId))
+            break;
+          excluded.push(probe.probeId);
+          probe = selectProbe({ ...ctx, askedProbeIds: excluded });
+        }
+        if (/outage|failure|third-party|latency/.test(probe.probeId)) {
+          sd.phase = "FAILURE";
+          sd.questionTarget = sd.questionsAsked + 1;
+          const question = failureQuestion(state, problem);
+          this.pushSystemDesignQuestion(state, question, turnId);
+        } else {
+          sd.phase = "DISCUSSION";
+          sd.probesAsked.push(probe.probeId);
+          sd.selectedProbeIds.push(probe.probeId);
+          const question = await phraseProbeQuestion({
+            llm: this.llm,
+            interviewId: input.interviewId,
+            problem,
+            probe,
+            components: ctx.components,
+            state,
+          });
+          this.pushSystemDesignQuestion(state, question, turnId);
+          events.push(
+            domainEvent(input.interviewId, "system_design.probe", {
+              probeId: probe.probeId,
+              revision: probe.revision,
+              reason: probe.reason,
+            }),
+          );
+        }
+      } catch (err) {
+        events.push(
+          domainEvent(input.interviewId, "system_design.degraded", {
+            error: String(err).slice(0, 200),
+          }),
+        );
+        const edge = active.snapshot.edges.find(
+          (item) => !sd.probesAsked.includes(`snapshot.flow:${item.id}`),
+        );
+        if (edge) {
+          const labels = new Map(
+            active.snapshot.nodes.map((node) => [
+              node.id,
+              `${node.data.label} (${node.data.componentType})`,
+            ]),
+          );
+          const probeId = `snapshot.flow:${edge.id}`;
+          const probe: SelectedProbe = {
+            probeId: "snapshot.flow",
+            submissionId: active.submissionId,
+            revision: active.revision,
+            referencedComponentIds: [edge.source, edge.target],
+            graphPath: [edge.source, edge.target],
+            reason:
+              "Graph inspection is unavailable; use the canonical submitted edge.",
+          };
+          sd.phase = "DISCUSSION";
+          sd.probesAsked.push(probeId);
+          sd.selectedProbeIds.push(probeId);
+          const question = await phraseProbeQuestion({
+            llm: this.llm,
+            interviewId: input.interviewId,
+            problem,
+            probe,
+            components: active.snapshot.nodes.map((node) => ({
+              componentId: node.id,
+              kind: node.data.componentType,
+              label: labels.get(node.id) ?? node.data.label,
+            })),
+            state,
+          });
+          this.pushSystemDesignQuestion(state, question, turnId);
+          events.push(
+            domainEvent(input.interviewId, "system_design.snapshot_fallback", {
+              edgeId: edge.id,
+              revision: active.revision,
+            }),
+          );
+        } else {
+          sd.phase = "FAILURE";
+          sd.questionTarget = sd.questionsAsked + 1;
+          const question = failureQuestion(state, problem);
+          this.pushSystemDesignQuestion(state, question, turnId);
+        }
+      }
+    } else {
+      this.finishSystemDesign(state, turnId);
+    }
+    const questionId = sd.pendingQuestionId;
+    if (questionId)
+      events.push(
+        domainEvent(input.interviewId, "interviewer.question", {
+          questionId,
+          phase: sd.phase,
+          mode: "SYSTEM_DESIGN",
+        }),
+      );
+  }
+  private extendEditDeadline(deadlineAt: Date): Date {
+    const now = Date.now();
+    return deadlineAt.getTime() - now < 120_000
+      ? new Date(now + 120_000)
+      : deadlineAt;
+  }
   private async save(
     interviewId: string,
     token: string,
@@ -101,6 +326,7 @@ export class InterviewOrchestrator {
     state: InterviewState,
     events: ReturnType<typeof domainEvent>[] = [],
     turn?: { id: string; status: string; error?: string },
+    deadlineAt?: Date,
   ): Promise<void> {
     stateSchema.parse(state);
     await prisma.$transaction(async (tx) => {
@@ -114,6 +340,7 @@ export class InterviewOrchestrator {
         data: {
           version: { increment: 1 },
           data: state as unknown as Prisma.InputJsonValue,
+          ...(deadlineAt ? { deadlineAt } : {}),
         },
       });
       if (!updated.count)
@@ -265,27 +492,37 @@ export class InterviewOrchestrator {
     if (interview.status !== "active")
       throw new Error("Interview is not active");
     if (sessionId) await this.validateSession(interviewId, sessionId);
-    const active = await getActiveSubmission(interviewId);
-    if (!active)
-      throw new Error("Interview has no ready architecture submission");
-    const problem = getProblem(interview.systemDesignProblemId ?? "");
-    if (!problem) throw new Error("Unknown system design problem");
     return withInterviewLock(interviewId, async (token) => {
       const row = await prisma.interviewRuntime.findUniqueOrThrow({
         where: { interviewId },
       });
       const state = stateSchema.parse(row.data);
+      const sd = state.systemDesign;
+      if (!sd) throw new Error("System design interview state is missing");
+      const problem =
+        sd.problemSnapshot ?? getProblem(interview.systemDesignProblemId ?? "");
+      if (!problem) throw new Error("Unknown system design problem");
       if (row.deadlineAt <= new Date()) {
-        state.ended = true;
+        this.finishSystemDesign(state);
         state.endReason = "time_limit";
-        transition(state, "FINAL");
         await this.save(interviewId, token, row.version, state);
         return { ended: true };
       }
-      if (state.questions.length || state.ended)
+      if (state.ended) return { ended: true };
+      if (sd.pendingQuestionId)
+        return this.response(state, sd.pendingQuestionId, row.deadlineAt);
+      const active = await getActiveSubmission(interviewId);
+      if (!active)
+        throw new Error("Interview has no ready architecture submission");
+      if (state.questions.length)
         return this.response(state, state.questions.at(-1)?.id, row.deadlineAt);
-      const question = introQuestion(state, problem);
-      state.questions.push(question);
+      sd.problemVersion = problem.version;
+      const remainingMinutes =
+        (row.deadlineAt.getTime() - Date.now()) / 60_000;
+      sd.questionTarget = remainingMinutes >= 11 ? 4 : remainingMinutes >= 7 ? 3 : 2;
+      sd.phase = "DISCUSSION";
+      const question = introQuestion(state, problem, active.snapshot);
+      this.pushSystemDesignQuestion(state, question);
       await this.save(interviewId, token, row.version, state, [
         domainEvent(interviewId, "interview.started", {
           phase: state.phase,
@@ -293,7 +530,7 @@ export class InterviewOrchestrator {
         }),
         domainEvent(interviewId, "interviewer.question", {
           questionId: question.id,
-          phase: state.phase,
+          phase: sd.phase,
         }),
       ]);
       return this.response(state, question.id, row.deadlineAt);
@@ -374,6 +611,15 @@ export class InterviewOrchestrator {
           });
           return this.response(state, lastQuestion.id, row.deadlineAt);
         }
+        if (lastQuestion.checkpoint)
+          return this.continueCheckpointTurn({
+            interviewId: input.interviewId,
+            token,
+            row,
+            state,
+            turnId: input.turnId,
+            text: input.text,
+          });
         lastQuestion.answerTurnId = input.turnId;
         const events = [
           domainEvent(input.interviewId, "candidate.transcript.final", {
@@ -381,7 +627,7 @@ export class InterviewOrchestrator {
             questionId,
           }),
         ];
-        if (row.deadlineAt <= new Date()) {
+        if (row.deadlineAt <= new Date() && interview.mode !== "SYSTEM_DESIGN") {
           state.ended = true;
           state.endReason = "time_limit";
           transition(state, "FINAL");
@@ -577,6 +823,135 @@ export class InterviewOrchestrator {
       }),
     );
   }
+  private async continueCheckpointTurn(input: {
+    interviewId: string;
+    token: string;
+    row: { version: number; deadlineAt: Date };
+    state: InterviewState;
+    turnId: string;
+    text: string;
+  }): Promise<NextResponse> {
+    const { interviewId, token, row, state, turnId, text } = input;
+    const sd = state.systemDesign;
+    const checkpoint = sd?.checkpoint;
+    const problem = sd?.problemSnapshot ?? getProblem(sd?.problemId ?? "");
+    if (!sd || !checkpoint || !problem) {
+      this.finishSystemDesign(state, turnId);
+      await this.save(interviewId, token, row.version, state, [], {
+        id: turnId,
+        status: "completed",
+      });
+      return { ended: true };
+    }
+    const normalized = text.toLowerCase();
+    const refusesEdit =
+      /\b(no change|no revision|keep (my|the) design|not (update|edit|change|revise)|won'?t|do not|don't)\b/.test(
+        normalized,
+      );
+    const wantsEdit =
+      !refusesEdit &&
+      /\b(update|edit|change|revise|resubmit|revision)\b/.test(normalized);
+    const wantsContinue =
+      refusesEdit ||
+      /\b(continue|next|move on|finish|nothing|done|ready)\b/.test(normalized);
+    state.processedTurns[turnId] = checkpoint.questionId;
+    if (checkpoint.status === "EDITING" || sd.phase === "EDITING") {
+      await this.save(interviewId, token, row.version, state, [], {
+        id: turnId,
+        status: "completed",
+      });
+      return this.response(state, checkpoint.questionId, row.deadlineAt);
+    }
+    if (checkpoint.status !== "AWAITING_CHOICE") {
+      await this.save(interviewId, token, row.version, state, [], {
+        id: turnId,
+        status: "completed",
+      });
+      return this.response(
+        state,
+        checkpoint.status === "RESOLVED"
+          ? sd.pendingQuestionId
+          : checkpoint.questionId,
+        row.deadlineAt,
+      );
+    }
+    if (wantsEdit && !wantsContinue && row.deadlineAt <= new Date()) {
+      this.finishSystemDesign(state, turnId);
+      await this.save(interviewId, token, row.version, state, [], {
+        id: turnId,
+        status: "completed",
+      });
+      return { ended: true };
+    }
+    if (wantsEdit && !wantsContinue) {
+      checkpoint.choice = "EDIT";
+      checkpoint.status = "EDITING";
+      sd.phase = "EDITING";
+      const prompt = checkpointPrompt(state, {
+        afterFailure: checkpoint.afterFailure,
+        editing: true,
+      });
+      checkpoint.questionId = prompt.id;
+      this.pushSystemDesignQuestion(state, prompt, turnId);
+      const deadlineAt = this.extendEditDeadline(row.deadlineAt);
+      await this.save(
+        interviewId,
+        token,
+        row.version,
+        state,
+        [
+          domainEvent(interviewId, "system_design.checkpoint", {
+            checkpointId: checkpoint.id,
+            choice: "EDIT",
+            afterFailure: checkpoint.afterFailure,
+          }),
+        ],
+        { id: turnId, status: "completed" },
+        deadlineAt,
+      );
+      return this.response(state, prompt.id, deadlineAt);
+    }
+    if (wantsContinue && !wantsEdit) {
+      checkpoint.choice = "CONTINUE";
+      checkpoint.status = "RESOLVED";
+      checkpoint.resolvedAt = new Date().toISOString();
+      const events = [
+        domainEvent(interviewId, "system_design.checkpoint", {
+          checkpointId: checkpoint.id,
+          choice: "CONTINUE",
+          afterFailure: checkpoint.afterFailure,
+        }),
+      ];
+      await this.askNextSystemDesign({
+        interviewId,
+        state,
+        problem,
+        checkpoint,
+        deadlineAt: row.deadlineAt,
+        turnId,
+        events,
+      });
+      await this.save(
+        interviewId,
+        token,
+        row.version,
+        state,
+        events,
+        { id: turnId, status: "completed" },
+      );
+      return this.response(
+        state,
+        state.processedTurns[turnId],
+        row.deadlineAt,
+      );
+    }
+    await this.save(interviewId, token, row.version, state, [], {
+      id: turnId,
+      status: "completed",
+    });
+    return this.response(state, checkpoint.questionId, row.deadlineAt);
+  }
+
   private async continueSystemDesign(input: {
     interviewId: string;
     token: string;
@@ -589,138 +964,195 @@ export class InterviewOrchestrator {
     const { interviewId, token, row, state, turnId, text, events } = input;
     const sd = state.systemDesign;
     if (!sd) throw new Error("System design interview state is missing");
-    const problem = getProblem(sd.problemId) ?? null;
+    const problem = sd.problemSnapshot ?? getProblem(sd.problemId);
     const active = await getActiveSubmission(interviewId);
-    const push = (question: QuestionRecord): void => {
-      state.questions.push({ ...question, sourceTurnId: turnId });
-      state.processedTurns[turnId] = question.id;
-      events.push(
-        domainEvent(interviewId, "interviewer.question", {
-          questionId: question.id,
-          phase: state.phase,
-          mode: "SYSTEM_DESIGN",
-        }),
-      );
-    };
-    const finish = (): void => {
-      state.ended = true;
-      state.endReason = "objectives_completed";
-      transition(state, "FINAL");
-      state.processedTurns[turnId] = "END";
-    };
-    const issueChallenge = (): void => {
-      if (!problem) return;
-      sd.phase = "REVISION_REQUESTED";
-      sd.challengeIssued = true;
-      push(challengeQuestion(state, problem));
-      events.push(
-        domainEvent(interviewId, "system_design.challenge", {
-          problemId: problem.id,
-        }),
-      );
-    };
-    const remaining = Math.max(
-      0,
-      (row.deadlineAt.getTime() - Date.now()) / 60_000,
-    );
-
-    try {
-      if (remaining <= 0 || !problem || !active) {
-        finish();
-      } else if (sd.phase === "DISCUSSION") {
-        if (sd.probesAsked.length >= MAX_SD_PROBES) {
-          issueChallenge();
-        } else {
-          const store = designGraphStore();
-          const ctx = await gatherProbeContext({
-            problem,
-            submissionId: active.submissionId,
-            revision: active.revision,
-            store,
-            askedProbeIds: sd.probesAsked,
-          });
-          const probe = selectProbe(ctx);
-          // A small graph may exhaust its distinct probes before the limit.
-          if (sd.probesAsked.includes(probe.probeId)) {
-            issueChallenge();
-          } else {
-            sd.probesAsked.push(probe.probeId);
-            sd.selectedProbeIds.push(probe.probeId);
-            const question = await phraseProbeQuestion({
-              llm: this.llm,
-              interviewId,
-              problem,
-              probe,
-              components: ctx.components,
-              state,
-            });
-            push(question);
-            events.push(
-              domainEvent(interviewId, "system_design.probe", {
-                probeId: probe.probeId,
-                revision: probe.revision,
-                reason: probe.reason,
-              }),
-            );
-          }
-        }
-      } else if (sd.phase === "REVISION_REQUESTED") {
-        if (sd.revisionSubmitted && active.revision >= 2) {
-          sd.phase = "REVISION_REVIEW";
-          const previous = await getReadySubmissionByRevision(interviewId, 1);
-          const question = await phraseRevisionReview({
-            llm: this.llm,
-            interviewId,
-            problem,
-            previous: previous ? componentsFromSnapshot(previous.snapshot) : [],
-            current: componentsFromSnapshot(active.snapshot),
-            state,
-          });
-          push(question);
-          events.push(
-            domainEvent(interviewId, "system_design.revision_reviewed", {
-              revision: active.revision,
-            }),
-          );
-        } else {
-          const decision = detectRevisionDecision(text);
-          if (decision === "declined") {
-            finish();
-          } else
-            push(
-              nudgeQuestion(
-                state,
-                problem,
-                sd.revisionSubmitted
-                  ? "I see you submitted an update, but I couldn't load it yet. Resubmit so we can review it."
-                  : "When you're ready, resubmit your updated design, or tell me if you'd prefer to keep your current design.",
-              ),
-            );
-        }
-      } else {
-        finish();
-      }
-    } catch (err) {
-      events.push(
-        domainEvent(interviewId, "system_design.degraded", {
-          error: String(err).slice(0, 200),
-        }),
-      );
-      if (!state.ended)
-        push(
-          nudgeQuestion(
-            state,
-            problem ?? ({ id: sd.problemId, title: "your design" } as never),
-            "Let's continue: what is the biggest risk in your design if a downstream dependency fails?",
-          ),
-        );
+    const answered = state.questions.at(-1);
+    if (!problem || !active || !answered) {
+      this.finishSystemDesign(state, turnId);
+      await this.save(interviewId, token, row.version, state, events, {
+        id: turnId,
+        status: "completed",
+      });
+      return { ended: true };
     }
-
+    const assessment = await assessSystemDesignAnswer({
+      llm: this.llm,
+      interviewId,
+      problem,
+      question: answered,
+      answer: text,
+      snapshot: active.snapshot,
+    });
+    sd.answerAssessments.push({
+      ...assessment,
+      questionId: answered.id,
+      turnId,
+      revision: answered.revision ?? active.revision,
+    });
+    if (answered.concern === "FAILURE" || sd.phase === "FAILURE")
+      sd.failureAnswerTurnId = turnId;
+    events.push(
+      domainEvent(interviewId, "system_design.answer_assessed", {
+        questionId: answered.id,
+        strength: assessment.strength,
+        concern: assessment.concern,
+        revision: answered.revision ?? active.revision,
+      }),
+    );
+    if (row.deadlineAt <= new Date()) {
+      this.finishSystemDesign(state, turnId);
+      state.endReason = "time_limit";
+      await this.save(interviewId, token, row.version, state, events, {
+        id: turnId,
+        status: "completed",
+      });
+      return { ended: true };
+    }
+    this.openCheckpoint(
+      state,
+      answered,
+      sd.phase === "FAILURE" || answered.concern === "FAILURE",
+      turnId,
+    );
+    const checkpointId = sd.checkpoint?.id;
+    if (checkpointId)
+      events.push(
+        domainEvent(interviewId, "system_design.checkpoint", {
+          checkpointId,
+          questionId: answered.id,
+          afterFailure: sd.checkpoint?.afterFailure ?? false,
+        }),
+      );
     await this.save(interviewId, token, row.version, state, events, {
       id: turnId,
       status: "completed",
     });
-    return this.response(state, state.processedTurns[turnId], row.deadlineAt);
+    return this.response(state, sd.pendingQuestionId, row.deadlineAt);
+  }
+
+  async resolveCheckpoint(
+    interviewId: string,
+    checkpointId: string,
+    choice: "CONTINUE" | "EDIT",
+  ): Promise<{ ended: boolean; status: string; deadlineAt?: string }> {
+    return withInterviewLock(interviewId, async (token) => {
+      const row = await prisma.interviewRuntime.findUniqueOrThrow({
+        where: { interviewId },
+      });
+      const state = stateSchema.parse(row.data);
+      const sd = state.systemDesign;
+      const checkpoint = sd?.checkpoint;
+      if (!sd || !checkpoint || checkpoint.id !== checkpointId)
+        throw new Error("Checkpoint not found");
+      if (state.ended) return { ended: true, status: checkpoint.status };
+      if (checkpoint.status === "RESOLVED")
+        return {
+          ended: state.ended,
+          status: checkpoint.status,
+          deadlineAt: row.deadlineAt.toISOString(),
+        };
+      const problem = sd.problemSnapshot ?? getProblem(sd.problemId);
+      if (!problem) throw new Error("Unknown system design problem");
+      const events: ReturnType<typeof domainEvent>[] = [];
+      if (choice === "EDIT") {
+        if (checkpoint.status === "EDITING")
+          return {
+            ended: false,
+            status: checkpoint.status,
+            deadlineAt: row.deadlineAt.toISOString(),
+          };
+        if (checkpoint.status !== "AWAITING_CHOICE")
+          throw new Error("Checkpoint is no longer editable");
+        if (row.deadlineAt <= new Date())
+          throw new Error("Interview time has ended");
+        checkpoint.choice = "EDIT";
+        checkpoint.status = "EDITING";
+        sd.phase = "EDITING";
+        const prompt = checkpointPrompt(state, {
+          afterFailure: checkpoint.afterFailure,
+          editing: true,
+        });
+        checkpoint.questionId = prompt.id;
+        this.pushSystemDesignQuestion(state, prompt);
+        const deadlineAt = this.extendEditDeadline(row.deadlineAt);
+        events.push(
+          domainEvent(interviewId, "system_design.checkpoint", {
+            checkpointId,
+            choice: "EDIT",
+            afterFailure: checkpoint.afterFailure,
+          }),
+        );
+        await this.save(
+          interviewId,
+          token,
+          row.version,
+          state,
+          events,
+          undefined,
+          deadlineAt,
+        );
+        return {
+          ended: false,
+          status: checkpoint.status,
+          deadlineAt: deadlineAt.toISOString(),
+        };
+      }
+      checkpoint.choice = "CONTINUE";
+      await this.askNextSystemDesign({
+        interviewId,
+        state,
+        problem,
+        checkpoint,
+        deadlineAt: row.deadlineAt,
+        events,
+      });
+      events.push(
+        domainEvent(interviewId, "system_design.checkpoint", {
+          checkpointId,
+          choice: "CONTINUE",
+          afterFailure: checkpoint.afterFailure,
+        }),
+      );
+      await this.save(interviewId, token, row.version, state, events);
+      return {
+        ended: state.ended,
+        status: checkpoint.status,
+        deadlineAt: row.deadlineAt.toISOString(),
+      };
+    });
+  }
+
+  async continueAfterCheckpoint(
+    interviewId: string,
+    checkpointId: string,
+  ): Promise<{ ended: boolean; status: string }> {
+    return withInterviewLock(interviewId, async (token) => {
+      const row = await prisma.interviewRuntime.findUniqueOrThrow({
+        where: { interviewId },
+      });
+      const state = stateSchema.parse(row.data);
+      const sd = state.systemDesign;
+      const checkpoint = sd?.checkpoint;
+      if (!sd || !checkpoint || checkpoint.id !== checkpointId)
+        throw new Error("Checkpoint not found");
+      if (checkpoint.status === "RESOLVED")
+        return { ended: state.ended, status: checkpoint.status };
+      if (checkpoint.status !== "SUBMITTED")
+        throw new Error("Checkpoint has not been submitted");
+      const problem = sd.problemSnapshot ?? getProblem(sd.problemId);
+      if (!problem) throw new Error("Unknown system design problem");
+      const events: ReturnType<typeof domainEvent>[] = [];
+      await this.askNextSystemDesign({
+        interviewId,
+        state,
+        problem,
+        checkpoint,
+        deadlineAt: row.deadlineAt,
+        events,
+      });
+      await this.save(interviewId, token, row.version, state, events);
+      return { ended: state.ended, status: checkpoint.status };
+    });
   }
 
   async recoverAnalysis(interviewId: string, turnId: string): Promise<void> {

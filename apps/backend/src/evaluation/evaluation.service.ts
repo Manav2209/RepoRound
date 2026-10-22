@@ -9,6 +9,7 @@ import { newId } from "../lib/ids.js";
 import { readGithubContext } from "../github/context.js";
 import { getProblem } from "../system-design/problems.js";
 import type { ArchitectureSnapshot } from "@repo/voice-types";
+import { diffArchitectureSnapshots } from "../system-design/diff.js";
 
 export class EvaluationService {
   private readonly evaluator: Evaluator;
@@ -148,7 +149,8 @@ export class EvaluationService {
     const context = readGithubContext(interview.knowledge?.facts);
     const problem =
       interview.mode === "SYSTEM_DESIGN" && interview.systemDesignProblemId
-        ? getProblem(interview.systemDesignProblemId)
+        ? state.systemDesign?.problemSnapshot ??
+          getProblem(interview.systemDesignProblemId)
         : undefined;
     const systemDesign =
       interview.mode === "SYSTEM_DESIGN"
@@ -163,7 +165,7 @@ export class EvaluationService {
                     owner: "",
                     name: problem?.title ?? "System Design",
                     projectSummary: problem
-                      ? `${problem.brief}\n\nRequirements:\n${problem.visibleRequirements.join("\n")}`.slice(
+                      ? `${problem.brief}\n\nRequirements:\n${problem.visibleRequirements.join("\n")}\n\nLoad assumption: ${problem.loadAssumption}\n\nConstraints:\n${problem.constraints.join("\n")}`.slice(
                           0,
                           2500,
                         )
@@ -285,26 +287,77 @@ export class EvaluationService {
     });
     const summarize = (row: (typeof submissions)[number]) => {
       const snapshot = row.snapshot as unknown as ArchitectureSnapshot;
+      const labels = new Map(
+        snapshot.nodes.map((node) => [node.id, node.data.label]),
+      );
+      const edge = (id: string) => ({
+        id,
+        label: labels.get(id) ?? id,
+      });
       return {
-        nodes: snapshot.nodes.length,
-        edges: snapshot.edges.length,
-        components: snapshot.nodes.map((n) => n.data.label).slice(0, 75),
+        revision: row.revision,
+        nodeCount: snapshot.nodes.length,
+        edgeCount: snapshot.edges.length,
+        nodes: snapshot.nodes.slice(0, 75).map((node) => ({
+          id: node.id,
+          label: node.data.label,
+          componentType: node.data.componentType,
+        })),
+        edges: snapshot.edges.slice(0, 150).map((item) => ({
+          source: edge(item.source),
+          target: edge(item.target),
+        })),
       };
     };
-    const revision1 = submissions.find((s) => s.revision === 1);
-    const revision2 = submissions.find((s) => s.revision === 2);
+    const revisions = submissions.map((row, index) => {
+      const previous = index > 0 ? submissions[index - 1] : undefined;
+      const current = summarize(row);
+      return previous
+        ? {
+            ...current,
+            diff: diffArchitectureSnapshots(
+              previous.snapshot as unknown as ArchitectureSnapshot,
+              row.snapshot as unknown as ArchitectureSnapshot,
+              previous.revision,
+              row.revision,
+            ),
+          }
+        : current;
+    });
+    const sd = state.systemDesign;
     return {
       problemTitle: problem?.title ?? "System design",
+      problemVersion: problem?.version ?? sd?.problemVersion ?? 1,
       brief: problem?.brief ?? "",
       requirements: problem?.visibleRequirements ?? [],
+      loadAssumption: problem?.loadAssumption ?? "",
+      constraints: problem?.constraints ?? [],
       challenge: problem?.challenge.prompt ?? "",
-      probesAsked: state.systemDesign?.probesAsked ?? [],
-      challengeIssued: state.systemDesign?.challengeIssued ?? false,
-      revisionSubmitted: state.systemDesign?.revisionSubmitted ?? false,
-      revision1: revision1
-        ? summarize(revision1)
-        : { nodes: 0, edges: 0, components: [] },
-      ...(revision2 ? { revision2: summarize(revision2) } : {}),
+      probesAsked: sd?.probesAsked ?? [],
+      challengeIssued: sd?.challengeIssued ?? false,
+      revisionSubmitted: sd?.revisionSubmitted ?? false,
+      questionCount: sd?.questionsAsked ?? 0,
+      questionTarget: sd?.questionTarget ?? 2,
+      failureAsked: sd?.failureAsked ?? false,
+      revisions,
+      answerAssessments: (sd?.answerAssessments ?? []).map((assessment) => ({
+        questionId: assessment.questionId,
+        revision: assessment.revision,
+        strength: assessment.strength,
+        concern: assessment.concern,
+        addressedQuestion: assessment.addressedQuestion,
+        consistentWithDiagram: assessment.consistentWithDiagram,
+        claimedGuaranteeOrTradeoff:
+          assessment.claimedGuaranteeOrTradeoff.slice(0, 300),
+        unresolvedAssumption: assessment.unresolvedAssumption?.slice(0, 300),
+      })),
+      checkpoints: (sd?.checkpoints ?? []).map((checkpoint) => ({
+        questionId: checkpoint.questionId,
+        status: checkpoint.status,
+        afterFailure: checkpoint.afterFailure,
+        choice: checkpoint.choice,
+        submittedRevision: checkpoint.submittedRevision,
+      })),
     };
   }
 
@@ -375,7 +428,16 @@ export class EvaluationService {
       where: {
         status: "active",
         OR: [
-          { runtime: { deadlineAt: { lte: now } } },
+          {
+            mode: "SYSTEM_DESIGN",
+            runtime: {
+              deadlineAt: { lte: new Date(now.getTime() - 90_000) },
+            },
+          },
+          {
+            mode: "GITHUB",
+            runtime: { deadlineAt: { lte: now } },
+          },
           {
             sessions: {
               some: {

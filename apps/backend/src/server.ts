@@ -31,6 +31,7 @@ import {
   createSystemDesignInterviewRouter,
 } from "./api/system-design.js";
 import { configureDesignGraph } from "./system-design/graph.js";
+import { reconcileDesignGraph } from "./system-design/submissions.js";
 import { requestCorrelation, serverError } from "./api/errors.js";
 
 const config = loadConfig();
@@ -43,13 +44,16 @@ configureDesignGraph({
 });
 
 const llm = new LlmClient(config);
-const interviewService = new InterviewService(llm);
+const interviewService = new InterviewService(
+  llm,
+  config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
+);
 const sessionService = new SessionService(config);
 const evaluationService = new EvaluationService(llm);
 const realtimeEvents = new RealtimeEventService();
 const orchestrator = new InterviewOrchestrator(
   llm,
-  config.INTERVIEW_DURATION_MINUTES,
+  config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
   config.GITHUB_INTERVIEW_DURATION_MINUTES,
 );
 
@@ -109,6 +113,19 @@ setInterval(() => {
     .catch(() => {});
 }, 10_000);
 
+let reconcilingDesignGraph = false;
+setInterval(() => {
+  if (reconcilingDesignGraph) return;
+  reconcilingDesignGraph = true;
+  void reconcileDesignGraph()
+    .catch((err: unknown) =>
+      console.error("design graph reconciliation failed", err),
+    )
+    .finally(() => {
+      reconcilingDesignGraph = false;
+    });
+}, 60_000);
+
 const app = new Hono();
 app.use("*", requestCorrelation);
 app.onError((error, c) => serverError(c, error));
@@ -146,7 +163,10 @@ app.route("/api/v1/interviews", createInterviewsRouter(interviewService));
 app.route("/api/v1/interviews", createSessionsRouter(sessionService));
 app.route("/api/v1/interviews", createCompletionRouter(evaluationService));
 app.route("/api/v1/interviews", createResultsRouter());
-app.route("/api/v1/interviews", createSystemDesignInterviewRouter());
+app.route(
+  "/api/v1/interviews",
+  createSystemDesignInterviewRouter(orchestrator),
+);
 app.route("/api/v1/system-design", createSystemDesignCatalogRouter());
 app.route(
   "/internal",

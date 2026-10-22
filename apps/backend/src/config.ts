@@ -31,12 +31,12 @@ const baseEnvSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   GITHUB_CLIENT_ID: z.string().min(1).optional(),
   GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
-  INTERVIEW_DURATION_MINUTES: z.coerce
+  SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES: z.coerce
     .number()
     .int()
-    .min(5)
-    .max(60)
-    .default(30),
+    .min(10)
+    .max(15)
+    .default(15),
   GITHUB_INTERVIEW_DURATION_MINUTES: z.coerce
     .number()
     .int()

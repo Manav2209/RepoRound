@@ -139,6 +139,17 @@ export function submitArchitecture(
   );
 }
 
+export function resolveDesignCheckpoint(
+  interviewId: string,
+  checkpointId: string,
+  choice: "CONTINUE" | "EDIT",
+): Promise<{ ended: boolean; status: string; deadlineAt?: string }> {
+  return request(`/api/v1/interviews/${interviewId}/design/checkpoint`, {
+    method: "POST",
+    body: JSON.stringify({ checkpointId, choice }),
+  });
+}
+
 const inFlightSessions = new Map<string, Promise<SessionInfo>>();
 
 export function startSession(interviewId: string): Promise<SessionInfo> {

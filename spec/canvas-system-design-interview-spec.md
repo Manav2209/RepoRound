@@ -1,6 +1,6 @@
 # Canvas system-design interview
 
-**Status:** Proposed product and implementation spec; no runtime changes  
+**Status:** Implemented locally; live voice walkthrough still pending
 **Updated:** 22 October 2026  
 **Scope:** The separate System Design practice mode, from problem selection through evaluation
 
@@ -89,4 +89,4 @@ The account-owned final report and post-evaluation deletion policy follow `inter
 5. Pass complete, bounded topology and revision history to evaluation; check that citations identify actual turns/revisions and that report generation still works after a retry.
 6. Keep the palette for this release and verify that the interviewer does not overinterpret renamed fixed kinds. Track freeform component creation as a separate editor decision.
 
-Acceptance scenarios: a candidate can submit an initial diagram, answer one question, revise, then receive a second question grounded in the **new** diagram; a candidate can skip every edit and still complete; a weak answer receives at most a targeted, time-budgeted clarification; a duplicate submission or repeated voice turn does not create another revision/question; a graph outage or reconnect preserves the active design and session progress; the final failure question is last; the report distinguishes actual topology changes from verbal claims and cites the evidence used; and typical sessions finish near 10–15 minutes without dropping a candidate's in-progress answer or revision. Test these locally before deployment. This document authorizes no implementation or deployment by itself.
+Acceptance scenarios: a candidate can submit an initial diagram, answer one question, revise, then receive a second question grounded in the **new** diagram; a candidate can skip every edit and still complete; a weak answer receives at most a targeted, time-budgeted clarification; a duplicate submission or repeated voice turn does not create another revision/question; a graph outage or reconnect preserves the active design and session progress; the final failure question is last; the report distinguishes actual topology changes from verbal claims and cites the evidence used; and typical sessions finish near 10–15 minutes without dropping a candidate's in-progress answer or revision. The backend and graph integration scenarios pass locally. A complete browser-and-voice walkthrough is still required before deployment.

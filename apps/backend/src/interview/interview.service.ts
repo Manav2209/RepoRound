@@ -11,13 +11,18 @@ import {
 import { storeKnowledge } from "../github/knowledge.js";
 import { withTrace } from "../observability/events.js";
 import { getProblem } from "../system-design/problems.js";
+import { initialSystemDesignState } from "./schemas.js";
+import { objectivesForProblem } from "./strategies/system-design.js";
 
 export class InterviewService {
   private readonly scraper = new GithubScraper();
   private readonly analyzer: GithubAnalyzer;
   private readonly planner: InterviewPlanner;
 
-  constructor(llm: LlmClient) {
+  constructor(
+    llm: LlmClient,
+    private readonly systemDesignDurationMinutes = 15,
+  ) {
     this.analyzer = new GithubAnalyzer(llm);
     this.planner = new InterviewPlanner(llm);
   }
@@ -60,14 +65,34 @@ export class InterviewService {
   ): Promise<{ id: string; status: InterviewStatus }> {
     const problem = getProblem(problemId);
     if (!problem) throw new Error("Unknown system design problem");
-    const row = await prisma.interview.create({
-      data: {
-        id: newId("int"),
-        mode: "SYSTEM_DESIGN",
-        systemDesignProblemId: problem.id,
-        userId,
-        status: "created",
-      },
+    const row = await prisma.$transaction(async (tx) => {
+      const created = await tx.interview.create({
+        data: {
+          id: newId("int"),
+          mode: "SYSTEM_DESIGN",
+          systemDesignProblemId: problem.id,
+          userId,
+          status: "created",
+        },
+      });
+      const state = initialSystemDesignState({
+        problemId: problem.id,
+        problemSnapshot: problem,
+        problemVersion: problem.version,
+        objectives: objectivesForProblem(problem),
+        difficulty: problem.difficulty,
+        phase: "DESIGN_PENDING",
+      });
+      await tx.interviewRuntime.create({
+        data: {
+          interviewId: created.id,
+          deadlineAt: new Date(
+            Date.now() + this.systemDesignDurationMinutes * 60_000,
+          ),
+          data: state as unknown as Prisma.InputJsonValue,
+        },
+      });
+      return created;
     });
     return { id: row.id, status: "created" };
   }

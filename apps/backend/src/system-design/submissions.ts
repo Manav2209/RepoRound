@@ -7,6 +7,7 @@ import type {
 } from "@repo/voice-types";
 import { newId } from "../lib/ids.js";
 import { designGraphStore } from "./graph.js";
+import { diffArchitectureSnapshots } from "./diff.js";
 import { stateSchema } from "../interview/schemas.js";
 import {
   InterviewBusyError,
@@ -29,6 +30,7 @@ export interface SubmissionOutcome {
   graphStatus: DesignGraphStatus;
   next: "START_INTERVIEW" | "RESUME_INTERVIEW";
   replayed: boolean;
+  noChange?: boolean;
 }
 
 export function snapshotHash(snapshot: ArchitectureSnapshot): string {
@@ -54,6 +56,7 @@ export interface ActiveSubmission {
   submissionId: string;
   revision: number;
   graphStatus: DesignGraphStatus;
+  graphError: string | null;
   snapshot: ArchitectureSnapshot;
   createdAt: Date;
 }
@@ -71,6 +74,7 @@ export async function getActiveSubmission(
     submissionId: row.id,
     revision: row.revision,
     graphStatus: "READY",
+    graphError: row.graphError,
     snapshot: row.snapshot as unknown as ArchitectureSnapshot,
     createdAt: row.createdAt,
   };
@@ -93,6 +97,7 @@ export async function getReadySubmissionByRevision(
     submissionId: row.id,
     revision: row.revision,
     graphStatus: "READY",
+    graphError: row.graphError,
     snapshot: row.snapshot as unknown as ArchitectureSnapshot,
     createdAt: row.createdAt,
   };
@@ -101,21 +106,37 @@ export async function getReadySubmissionByRevision(
 async function revisionAllowed(
   interviewId: string,
   expectedRevision: number,
-): Promise<boolean> {
-  if (expectedRevision === 0) return true;
-  if (expectedRevision !== 1) return false;
-  const active = await getActiveSubmission(interviewId);
-  if (!active || active.revision !== 1) return false;
+): Promise<{ allowed: boolean; deadlineAt?: Date; ended?: boolean }> {
   const runtime = await prisma.interviewRuntime.findUnique({
     where: { interviewId },
   });
-  if (!runtime) return false;
+  if (!runtime) return { allowed: expectedRevision === 0 };
+  let state;
   try {
-    const state = stateSchema.parse(runtime.data);
-    return state.systemDesign?.phase === "REVISION_REQUESTED";
+    state = stateSchema.parse(runtime.data);
   } catch {
-    return false;
+    return { allowed: false };
   }
+  if (state.ended) return { allowed: false, ended: true };
+  if (expectedRevision === 0)
+    return {
+      allowed:
+        !state.systemDesign || state.systemDesign.activeRevision === 0,
+      deadlineAt: runtime.deadlineAt,
+    };
+  const sd = state.systemDesign;
+  if (!sd || sd.activeRevision !== expectedRevision)
+    return { allowed: false, deadlineAt: runtime.deadlineAt };
+  if (sd.phase === "REVISION_REQUESTED" && expectedRevision === 1)
+    return { allowed: true, deadlineAt: runtime.deadlineAt };
+  const checkpoint = sd.checkpoint;
+  return {
+    allowed:
+      sd.phase === "EDITING" &&
+      checkpoint?.status === "EDITING" &&
+      checkpoint.questionRevision === expectedRevision,
+    deadlineAt: runtime.deadlineAt,
+  };
 }
 
 export async function submitArchitecture(input: {
@@ -154,11 +175,44 @@ export async function submitArchitecture(input: {
     return buildAndPublish(replay.id, snapshot, true);
   }
 
-  if (!(await revisionAllowed(interviewId, request.expectedRevision)))
+  const gate = await revisionAllowed(
+    interviewId,
+    request.expectedRevision,
+  );
+  if (!gate.allowed)
     throw new SubmissionError(
       "Revision is not permitted for the current interview stage",
       409,
     );
+  if (gate.ended)
+    throw new SubmissionError("Interview time has ended", 409);
+  if (gate.deadlineAt && gate.deadlineAt <= new Date())
+    throw new SubmissionError("Interview time has ended", 409);
+
+  if (request.expectedRevision > 0) {
+    const active = await getActiveSubmission(interviewId);
+    if (!active || active.revision !== request.expectedRevision)
+      throw new SubmissionError(
+        "Revision is not permitted for the current interview stage",
+        409,
+      );
+    if (
+      !diffArchitectureSnapshots(
+        active.snapshot,
+        snapshot,
+        active.revision,
+        active.revision + 1,
+      ).material
+    )
+      return {
+        submissionId: active.submissionId,
+        revision: active.revision,
+        graphStatus: active.graphStatus,
+        next: "RESUME_INTERVIEW",
+        replayed: false,
+        noChange: true,
+      };
+  }
 
   const revision = request.expectedRevision + 1;
   let submissionId: string;
@@ -222,26 +276,29 @@ function outcome(
 
 async function replayReady(
   interviewId: string,
-  row: { id: string; revision: number },
+  row: { id: string; revision: number; graphError: string | null },
 ): Promise<SubmissionOutcome> {
   const runtime = await prisma.interviewRuntime.findUnique({
     where: { interviewId },
   });
-  if (runtime) {
-    const state = stateSchema.parse(runtime.data);
-    const sd = state.systemDesign;
-    if (
-      state.ended ||
-      (sd &&
-        (sd.activeRevision > row.revision ||
-          (sd.activeRevision === row.revision &&
-            sd.activeSubmissionId === row.id &&
-            (row.revision !== 2 || sd.revisionSubmitted))))
-    )
-      return outcome(row, true);
-  }
+  if (!runtime) return outcome(row, true);
+  const state = stateSchema.parse(runtime.data);
+  const sd = state.systemDesign;
+  if (
+    state.ended ||
+    (sd &&
+      (sd.activeRevision > row.revision ||
+        (sd.activeRevision === row.revision &&
+          sd.activeSubmissionId === row.id)))
+  )
+    return outcome(row, true);
   try {
-    await publishActiveRevision(interviewId, row.id, row.revision);
+    await publishActiveRevision(
+      interviewId,
+      row.id,
+      row.revision,
+      row.graphError,
+    );
   } catch (error) {
     if (error instanceof InterviewBusyError)
       throw new SubmissionError(
@@ -261,6 +318,7 @@ async function buildAndPublish(
   const row = await prisma.systemDesignSubmission.findUniqueOrThrow({
     where: { id: submissionId },
   });
+  let graphError: string | null = null;
   try {
     const store = designGraphStore();
     await store.install({
@@ -283,8 +341,13 @@ async function buildAndPublish(
       throw new Error(
         `Graph verification mismatch: ${JSON.stringify(verified)}`,
       );
-    // READY and runtime publication commit together after graph verification.
-    await publishActiveRevision(row.interviewId, row.id, row.revision);
+  } catch (err) {
+    // PostgreSQL is the canonical submitted diagram. A graph outage must not
+    // strand a candidate at an edit checkpoint or discard a valid snapshot.
+    graphError = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+  }
+  try {
+    await publishActiveRevision(row.interviewId, row.id, row.revision, graphError);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.systemDesignSubmission.updateMany({
@@ -306,11 +369,12 @@ async function publishActiveRevision(
   interviewId: string,
   submissionId: string,
   revision: number,
+  graphError: string | null = null,
 ): Promise<void> {
   const markReady = async (tx: Prisma.TransactionClient) => {
     const updated = await tx.systemDesignSubmission.updateMany({
       where: { id: submissionId, interviewId },
-      data: { graphStatus: "READY", graphError: null, readyAt: new Date() },
+      data: { graphStatus: "READY", graphError, readyAt: new Date() },
     });
     if (!updated.count)
       throw new Error("Submission disappeared during publication");
@@ -333,19 +397,42 @@ async function publishActiveRevision(
       where: { interviewId },
     });
     const state = stateSchema.parse(row.data);
-    if (!state.systemDesign)
-      throw new Error("System design runtime is missing");
+    const sd = state.systemDesign;
+    if (!sd) throw new Error("System design runtime is missing");
     // Replaying an old revision must never roll back a newer published design.
-    if (state.systemDesign.activeRevision > revision) return;
-    if (
-      state.systemDesign.activeSubmissionId === submissionId &&
-      state.systemDesign.activeRevision === revision &&
-      (revision !== 2 || state.systemDesign.revisionSubmitted)
-    )
+    if (sd.activeRevision > revision) return;
+    if (sd.activeSubmissionId === submissionId && sd.activeRevision === revision)
       return;
-    state.systemDesign.activeRevision = revision;
-    state.systemDesign.activeSubmissionId = submissionId;
-    if (revision === 2) state.systemDesign.revisionSubmitted = true;
+    const incoming = await prisma.systemDesignSubmission.findUniqueOrThrow({
+      where: { id: submissionId },
+      select: { snapshot: true },
+    });
+    const previous =
+      sd.activeSubmissionId && sd.activeRevision > 0
+        ? await prisma.systemDesignSubmission.findUnique({
+            where: { id: sd.activeSubmissionId },
+            select: { snapshot: true },
+          })
+        : null;
+    if (previous)
+      sd.lastRevisionDiff = diffArchitectureSnapshots(
+        previous.snapshot as unknown as ArchitectureSnapshot,
+        incoming.snapshot as unknown as ArchitectureSnapshot,
+        sd.activeRevision,
+        revision,
+      );
+    sd.activeRevision = revision;
+    sd.activeSubmissionId = submissionId;
+    if (revision > 1) {
+      sd.revisionSubmitted = true;
+      if (sd.checkpoint?.status === "EDITING") {
+        sd.checkpoint.status = "SUBMITTED";
+        sd.checkpoint.submittedRevision = revision;
+      }
+    } else if (sd.phase === "DESIGN_PENDING") {
+      sd.phase = "DISCUSSION";
+    }
+    sd.pendingQuestionId = undefined;
     await prisma.$transaction(async (tx) => {
       const updated = await tx.interviewRuntime.updateMany({
         where: { interviewId, version: row.version, leaseToken: token },
@@ -357,6 +444,44 @@ async function publishActiveRevision(
       if (!updated.count)
         throw new Error("Runtime changed while publishing submission");
       await markReady(tx);
+      if (revision === 1)
+        await tx.interview.updateMany({
+          where: { id: interviewId, status: "created" },
+          data: { status: "ready", error: null },
+        });
     });
+  });
+}
+
+/** Repair one optional graph projection without changing the active revision. */
+export async function reconcileDesignGraph(): Promise<void> {
+  const row = await prisma.systemDesignSubmission.findFirst({
+    where: { graphStatus: "READY", graphError: { not: null } },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!row) return;
+  const snapshot = row.snapshot as unknown as ArchitectureSnapshot;
+  const store = designGraphStore();
+  await store.install({
+    interviewId: row.interviewId,
+    submissionId: row.id,
+    revision: row.revision,
+    snapshot,
+  });
+  const verified = await store.verify({
+    submissionId: row.id,
+    revision: row.revision,
+    expectedNodes: snapshot.nodes.length,
+    expectedEdges: snapshot.edges.length,
+  });
+  if (
+    verified.nodeCount !== snapshot.nodes.length ||
+    verified.edgeCount !== snapshot.edges.length ||
+    verified.crossSubmissionEdges !== 0
+  )
+    throw new Error("Design graph reconciliation mismatch");
+  await prisma.systemDesignSubmission.updateMany({
+    where: { id: row.id, graphStatus: "READY", graphError: { not: null } },
+    data: { graphError: null },
   });
 }

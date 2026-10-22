@@ -145,9 +145,11 @@ export class Evaluator {
             "Do not reward invented code facts, ownership, current bottlenecks, or alternatives the candidate never mentioned. " +
             "When an explanation refers to repository code, use only the supplied questionHistory repositoryReferences. " +
             "Treat fewer main or applied questions than the counters target, including an unreached applied block, as an interview coverage limitation rather than a weakness. " +
-            "When systemDesign context is present, assess requirements handling, architecture tradeoffs, reliability/scalability reasoning, " +
-            "how well the candidate explained their submitted components, their response to the outage challenge, and any actual design changes in revision 2. " +
-            "Never invent design changes that revision 2 does not contain; if there is no revision 2, do not penalize the candidate for that. " +
+            "When systemDesign context is present, assess the stated load and constraints, requirements handling, architecture tradeoffs, " +
+            "reliability/scalability reasoning, how well the candidate explained their submitted components, their final failure response, " +
+            "and the actual diffs in every READY revision. Use answerAssessments only as supporting signals; the transcript is authoritative. " +
+            "Revisions are optional: never penalize a Continue decision, a no-change response, or the absence of a later revision. " +
+            "Never invent design changes that a revision diff does not contain. " +
             "Return JSON only.",
         },
         {
