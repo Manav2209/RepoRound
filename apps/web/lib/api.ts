@@ -86,6 +86,10 @@ export function getReports(signal?: AbortSignal): Promise<{
   return request("/api/v1/interviews", { signal });
 }
 
+export function deleteReport(interviewId: string): Promise<void> {
+  return request(`/api/v1/interviews/${interviewId}/report`, { method: "DELETE" });
+}
+
 export function getInterview(
   interviewId: string,
   signal?: AbortSignal,

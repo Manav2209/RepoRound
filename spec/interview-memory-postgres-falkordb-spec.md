@@ -1,6 +1,6 @@
 # Interview memory: PostgreSQL and FalkorDB
 
-**Status:** Proposed; no runtime changes in this document  
+**Status:** Implemented locally; graph retrieval remains disabled pending a measured quality/latency benefit, and full snapshot-loss replay remains unsupported
 **Updated:** 22 October 2026  
 **Scope:** Interview-scoped memory, retrieval, recovery, and post-evaluation retention
 
@@ -10,7 +10,7 @@ This spec replaces the interview-memory and retention design in section 4 and th
 
 During a GitHub or system-design interview, the interviewer should recall an earlier, relevant candidate answer, identify its source, and ask a grounded follow-up without delaying the voice exchange. It should resume correctly after a worker restart or FalkorDB outage. After a durable report is created, temporary interview memory and raw interview records should be deleted.
 
-Today `InterviewRuntime.data` in PostgreSQL already contains objectives, claims, evidence, question history, processed turn IDs, phase, and system-design progress. `ConversationTurn` contains the exact answers, and `SystemDesignSubmission.snapshot` contains the submitted design. The turn handler loads the runtime before choosing the next question. However, the GitHub question generator currently passes only the last four claims and last four evidence items to its prompt. Selecting relevant facts from the **already loaded runtime** is the first improvement; it needs no network retrieval call. FalkorDB currently stores the immutable submitted design topology, scoped by submission ID. It does not hold general candidate memory yet.
+`InterviewRuntime.data` in PostgreSQL contains objectives, claims, evidence, question history, processed turn IDs, phase, system-design progress, and a bounded canonical fact ledger. `ConversationTurn` contains the exact answers while the interview is retryable, and `SystemDesignSubmission.snapshot` contains the submitted design. GitHub question generation selects relevant claims and evidence from the loaded runtime; canvas follow-ups receive bounded prior candidate facts. FalkorDB holds immutable submitted design topology and an interview-scoped fact projection. No live question waits for that projection. Snapshot-loss replay has not been implemented; malformed or missing runtime data fails explicitly rather than being reconstructed from FalkorDB.
 
 ## 2. Storage boundary
 

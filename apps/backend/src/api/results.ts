@@ -7,6 +7,11 @@ import { problemSummary } from "../system-design/problems.js";
 export function createResultsRouter(): Hono {
   const app = new Hono();
   app.get("/:interviewId/transcript", async (c) => {
+    const available = await prisma.interview.findUnique({
+      where: { id: c.req.param("interviewId") },
+      select: { id: true },
+    });
+    if (!available) return c.json({ error: "Raw transcript has been deleted" }, 410);
     const turns = await prisma.conversationTurn.findMany({
       where: { interviewId: c.req.param("interviewId") },
       orderBy: [{ completedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
@@ -31,6 +36,19 @@ export function createResultsRouter(): Hono {
 
   app.get("/:interviewId/result", async (c) => {
     const { interviewId } = c.req.param();
+
+    const report = await prisma.report.findUnique({ where: { interviewId } });
+    if (report) return c.json({
+      status: "completed",
+      score: report.score,
+      dimensions: report.dimensions,
+      evidence: report.evidence,
+      strengths: report.strengths,
+      weaknesses: report.weaknesses,
+      feedback: report.feedback,
+      ...(report.coverage ? { coverage: report.coverage } : {}),
+      summary: report.summary,
+    });
 
     const interview = await interviewRepo.getById(interviewId);
     if (!interview) {
@@ -102,6 +120,13 @@ export function createResultsRouter(): Hono {
       feedback: evaluation.feedback,
       summary,
     });
+  });
+
+  app.delete("/:interviewId/report", async (c) => {
+    const deleted = await prisma.report.deleteMany({
+      where: { interviewId: c.req.param("interviewId"), userId: c.get("userId") },
+    });
+    return deleted.count ? c.body(null, 204) : c.json({ error: "Report not found" }, 404);
   });
 
   return app;

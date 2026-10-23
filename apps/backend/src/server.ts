@@ -33,11 +33,18 @@ import {
 import { configureDesignGraph } from "./system-design/graph.js";
 import { reconcileDesignGraph } from "./system-design/submissions.js";
 import { requestCorrelation, serverError } from "./api/errors.js";
+import { configureMemoryGraph, reconcileMemoryGraph } from "./interview/memory-graph.js";
+import { reconcileInterviewCleanup } from "./interview/cleanup.js";
 
 const config = loadConfig();
 const auth = createAuth(config);
 
 configureDesignGraph({
+  host: config.FALKORDB_HOST,
+  port: config.FALKORDB_PORT,
+  graph: config.FALKORDB_GRAPH,
+});
+configureMemoryGraph({
   host: config.FALKORDB_HOST,
   port: config.FALKORDB_PORT,
   graph: config.FALKORDB_GRAPH,
@@ -125,6 +132,19 @@ setInterval(() => {
       reconcilingDesignGraph = false;
     });
 }, 60_000);
+
+let reconcilingMemory = false;
+setInterval(() => {
+  if (reconcilingMemory) return;
+  reconcilingMemory = true;
+  void Promise.allSettled([reconcileMemoryGraph(), reconcileInterviewCleanup()])
+    .then((results) => {
+      for (const result of results)
+        if (result.status === "rejected") console.error("memory reconciliation failed", result.reason);
+    })
+    .catch((error: unknown) => console.error("memory reconciliation failed", error))
+    .finally(() => { reconcilingMemory = false; });
+}, 15_000);
 
 const app = new Hono();
 app.use("*", requestCorrelation);

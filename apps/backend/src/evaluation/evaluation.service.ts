@@ -10,6 +10,21 @@ import { readGithubContext } from "../github/context.js";
 import { getProblem } from "../system-design/problems.js";
 import type { ArchitectureSnapshot } from "@repo/voice-types";
 import { diffArchitectureSnapshots } from "../system-design/diff.js";
+import { problemSummary } from "../system-design/problems.js";
+
+function retainedEvidence(evidence: ReturnType<typeof emptyEvaluation>["evidence"]): Prisma.InputJsonValue {
+  return Object.fromEntries(Object.entries(evidence).map(([dimension, item]) => [
+    dimension,
+    {
+      level: item.level,
+      confidence: item.confidence,
+      explanation: item.explanation.slice(0, 500),
+      observations: (item.observations ?? []).slice(0, 2).map((observation) => ({
+        quote: observation.quote.slice(0, 160),
+      })),
+    },
+  ])) as Prisma.InputJsonValue;
+}
 
 export class EvaluationService {
   private readonly evaluator: Evaluator;
@@ -20,6 +35,8 @@ export class EvaluationService {
   async finalize(
     interviewId: string,
   ): Promise<{ status: "completed" | "failed" | "pending" }> {
+    if (await prisma.report.findUnique({ where: { interviewId } }))
+      return { status: "completed" };
     const result = await prisma.evaluation.findUnique({
       where: { interviewId },
     });
@@ -109,6 +126,8 @@ export class EvaluationService {
   private async runEvaluation(
     interviewId: string,
   ): Promise<{ status: "completed" }> {
+    if (await prisma.report.findUnique({ where: { interviewId } }))
+      return { status: "completed" };
     const previous = await prisma.evaluation.findUnique({
       where: { interviewId },
     });
@@ -235,6 +254,22 @@ export class EvaluationService {
           }),
         )
       : emptyEvaluation();
+    const completedAt = interview.completedAt ?? previous?.createdAt ?? new Date();
+    const candidateTurns = turns.filter((turn) => turn.role === "user");
+    const summary = {
+      repository: interview.mode === "SYSTEM_DESIGN"
+        ? problemSummary(interview.systemDesignProblemId ?? "")?.title ?? "System design interview"
+        : interview.owner && interview.name
+          ? `${interview.owner}/${interview.name}`
+          : "Repository interview",
+      candidateTurns: candidateTurns.length,
+      answeredQuestions: new Set(candidateTurns.map((turn) => turn.questionId).filter(Boolean)).size,
+      analyzedTurns: candidateTurns.filter((turn) => turn.analysisStatus === "completed").length,
+      failedAnalyses: candidateTurns.filter((turn) => turn.analysisStatus === "failed").length,
+      durationSeconds: interview.startedAt
+        ? Math.max(0, Math.round((completedAt.getTime() - interview.startedAt.getTime()) / 1000))
+        : null,
+    };
     await prisma.$transaction(async (tx) => {
       const { coverage, ...assessment } = result;
       const data = { ...assessment, dimensions: { ...result.dimensions } };
@@ -249,8 +284,7 @@ export class EvaluationService {
           status: "completed",
           error: null,
           evaluationLeaseUntil: null,
-          completedAt:
-            interview.completedAt ?? previous?.createdAt ?? new Date(),
+          completedAt,
         },
       });
       state.phase = "COMPLETED";
@@ -267,6 +301,30 @@ export class EvaluationService {
           evidenceCount: evidence.length,
           ...(coverage ? { coverage } : {}),
         }),
+      });
+      await tx.report.upsert({
+        where: { interviewId },
+        create: {
+          interviewId,
+          userId: interview.userId,
+          mode: interview.mode,
+          title: summary.repository,
+          score: result.score,
+          dimensions: result.dimensions as unknown as Prisma.InputJsonValue,
+          strengths: result.strengths,
+          weaknesses: result.weaknesses,
+          feedback: result.feedback,
+          evidence: retainedEvidence(result.evidence),
+          coverage: coverage ? coverage as unknown as Prisma.InputJsonValue : Prisma.JsonNull,
+          summary: summary as Prisma.InputJsonValue,
+          completedAt,
+        },
+        update: {},
+      });
+      await tx.interviewCleanup.upsert({
+        where: { interviewId },
+        create: { interviewId },
+        update: {},
       });
     });
     return { status: "completed" };
@@ -379,6 +437,9 @@ export class EvaluationService {
   }
 
   async retry(interviewId: string): Promise<void> {
+    if (await prisma.report.findUnique({ where: { interviewId } }) ||
+        await prisma.interviewCleanup.findUnique({ where: { interviewId } }))
+      throw new Error("Report is final; start a new interview for another assessment");
     await prisma.$transaction(async (tx) => {
       const changed = await tx.interview.updateMany({
         where: {

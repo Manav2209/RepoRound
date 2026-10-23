@@ -94,6 +94,12 @@ function authFixture() {
         : null;
     },
   };
+  db.report = {
+    findFirst: async ({ where }: any) =>
+      where.interviewId === "archived-mine" && where.userId === "user-1"
+        ? { id: "report-1" }
+        : null,
+  };
   const auth = {
     api: {
       getSession: async ({ headers }: { headers: Headers }) => {
@@ -136,6 +142,7 @@ function authFixture() {
   app.route("/api/v1/system-design", createSystemDesignCatalogRouter());
   app.post("/api/v1/interviews", (c: any) => c.json({ ok: true }, 201));
   app.get("/api/v1/interviews/:id", (c: any) => c.json({ ok: true }));
+  app.get("/api/v1/interviews/:id/result", (c: any) => c.json({ ok: true }));
   app.post("/api/v1/interviews/:id/design/submissions", (c: any) =>
     c.json({ ok: true }),
   );
@@ -189,6 +196,7 @@ test("ownership controls: owner allowed; another user's read and write rejected"
   expect(
     (await app.request("/api/v1/interviews/other", { headers })).status,
   ).toBe(404);
+  expect((await app.request("/api/v1/interviews/archived-mine/result", { headers })).status).toBe(200);
   expect(
     (
       await app.request("/api/v1/interviews/other/design/submissions", {
@@ -573,9 +581,12 @@ async function evaluationPayload(turns: any[], evidence: any[] = []) {
   let query: any;
   let payload: any;
   db.evaluation = { findUnique: async () => null, upsert: async () => ({}) };
+  db.report = { findUnique: async () => null, upsert: async () => ({}) };
+  db.interviewCleanup = { upsert: async () => ({}) };
   db.interview = {
     findUniqueOrThrow: async () => ({
       id: "i1",
+      userId: "user-1",
       mode: "GITHUB",
       status: "completing",
       runtime: { data },

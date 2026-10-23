@@ -223,6 +223,7 @@ export class QuestionGenerator {
     const verifiedSourcePaths = sourceExcerpts
       .map((excerpt) => excerpt.reference.path)
       .filter((path, index, paths) => paths.indexOf(path) === index);
+    const memoryStartedAt = Date.now();
     const relevantClaims = selectRelevantClaims(state, objective).map(
       (claim) => ({
         statement: claim.statement.slice(0, 300),
@@ -240,6 +241,12 @@ export class QuestionGenerator {
         sourceTurnId: evidence.sourceTurnId,
       }),
     );
+    void emit(interviewId, "memory.selection", {
+      mode: "GITHUB",
+      durationMs: Date.now() - memoryStartedAt,
+      returned: relevantClaims.length + relevantEvidence.length,
+      promptChars: JSON.stringify([relevantClaims, relevantEvidence]).length,
+    }).catch(() => {});
     const fallback = fallbackText(state, {
       objective,
       action,

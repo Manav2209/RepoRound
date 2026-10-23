@@ -3,7 +3,6 @@ import type { LlmClient } from "../llm/llm.client.js";
 import { structured } from "../llm/llm.client.js";
 import { RepositoryKnowledge } from "../github/knowledge.js";
 import type { CodeExcerpt } from "../github/knowledge.js";
-import { newId } from "../lib/ids.js";
 import { withTrace } from "../observability/events.js";
 import { answerAnalysisSchema } from "./schemas.js";
 import { ToolRegistry } from "./tools.js";
@@ -104,9 +103,9 @@ export class AnswerAnalyzer {
     analysis: z.infer<typeof answerAnalysisSchema>,
   ): void {
     // Detailed repository checks are deferred until the interview ends.
-    const claims = analysis.claims.map((c) => ({
+    const claims = analysis.claims.map((c, index) => ({
       ...c,
-      id: newId("claim"),
+      id: `claim_${turnId}_${index}`,
       sourceTurnId: turnId,
       status: "UNVERIFIED" as const,
     }));
@@ -213,10 +212,10 @@ export class AnswerAnalyzer {
   ): void {
     state.skills ??= {};
     state.exploredTopics ??= [];
-    for (const item of analysis.evidence) {
+    for (const [index, item] of analysis.evidence.entries()) {
       const ev = {
         ...item,
-        id: newId("ev"),
+        id: `ev_${turnId}_${index}`,
         objectiveId: objective.id,
         sourceTurnId: turnId,
       };

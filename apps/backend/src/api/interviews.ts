@@ -6,7 +6,6 @@ import { getActiveSubmission } from "../system-design/submissions.js";
 import { GithubScraperError } from "../github/github.scraper.js";
 import { serverError } from "./errors.js";
 import { prisma } from "@repo/db";
-import { problemSummary } from "../system-design/problems.js";
 
 const createInterviewSchema = z.union([
   z.object({ githubUrl: z.string().min(1).max(2048) }),
@@ -20,34 +19,20 @@ export function createInterviewsRouter(service: InterviewService): Hono {
   const app = new Hono();
 
   app.get("/", async (c) => {
-    const interviews = await prisma.interview.findMany({
-      where: { userId: c.get("userId"), status: "completed" },
+    const reports = await prisma.report.findMany({
+      where: { userId: c.get("userId") },
       orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
       take: 20,
       select: {
-        id: true,
+        interviewId: true,
         mode: true,
-        owner: true,
-        name: true,
-        systemDesignProblemId: true,
+        title: true,
         completedAt: true,
-        evaluation: { select: { score: true } },
+        score: true,
       },
     });
     return c.json({
-      reports: interviews.map((interview) => ({
-        interviewId: interview.id,
-        mode: interview.mode,
-        title:
-          interview.mode === "SYSTEM_DESIGN"
-            ? (problemSummary(interview.systemDesignProblemId ?? "")?.title ??
-              "System design interview")
-            : interview.owner && interview.name
-              ? `${interview.owner}/${interview.name}`
-              : "Repository interview",
-        score: interview.evaluation?.score ?? null,
-        completedAt: interview.completedAt,
-      })),
+      reports,
     });
   });
 

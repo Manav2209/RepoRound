@@ -6,6 +6,7 @@ import type { LlmClient } from "../llm/llm.client.js";
 import { domainEvent, emit, withTrace } from "../observability/events.js";
 import { enqueue, JobDeferred } from "../jobs/queue.js";
 import { AnswerAnalyzer } from "./answer-analyzer.js";
+import { deriveMemoryFacts } from "./memory-facts.js";
 import { QuestionGenerator } from "./question-generator.js";
 import { prepareGithubObjectives, stateSchema } from "./schemas.js";
 import { withInterviewLock } from "./runtime-lock.js";
@@ -328,6 +329,7 @@ export class InterviewOrchestrator {
     turn?: { id: string; status: string; error?: string },
     deadlineAt?: Date,
   ): Promise<void> {
+    state.memoryFacts = deriveMemoryFacts(state);
     stateSchema.parse(state);
     await prisma.$transaction(async (tx) => {
       const updated = await tx.interviewRuntime.updateMany({
@@ -345,6 +347,11 @@ export class InterviewOrchestrator {
       });
       if (!updated.count)
         throw new Error("Interview changed before turn was committed");
+      await tx.interviewMemoryProjection.upsert({
+        where: { interviewId },
+        create: { interviewId, version: version + 1 },
+        update: { version: version + 1 },
+      });
       if (turn)
         await tx.conversationTurn.update({
           where: { id: turn.id },
@@ -1185,6 +1192,7 @@ export class InterviewOrchestrator {
         true,
       );
       this.analyzer.apply(state, turnId, objective, analysis);
+      state.memoryFacts = deriveMemoryFacts(state);
       await prisma.$transaction(async (tx) => {
         const updated = await tx.interviewRuntime.updateMany({
           where: { interviewId, version: row.version, leaseToken: token },
@@ -1195,6 +1203,11 @@ export class InterviewOrchestrator {
         });
         if (!updated.count)
           throw new Error("State changed during analysis recovery");
+        await tx.interviewMemoryProjection.upsert({
+          where: { interviewId },
+          create: { interviewId, version: row.version + 1 },
+          update: { version: row.version + 1 },
+        });
         await tx.conversationTurn.update({
           where: { id: turnId },
           data: { analysisStatus: "completed", analysisError: null },
@@ -1279,6 +1292,7 @@ export class InterviewOrchestrator {
         claimIds,
         await RepositoryKnowledge.load(interviewId),
       );
+      state.memoryFacts = deriveMemoryFacts(state);
       await prisma.$transaction(async (tx) => {
         const saved = await tx.interviewRuntime.updateMany({
           where: { interviewId, leaseToken: token, version: row.version },
@@ -1289,6 +1303,11 @@ export class InterviewOrchestrator {
         });
         if (!saved.count)
           throw new Error("State changed during claim verification");
+        await tx.interviewMemoryProjection.upsert({
+          where: { interviewId },
+          create: { interviewId, version: row.version + 1 },
+          update: { version: row.version + 1 },
+        });
         await tx.interviewEvent.create({
           data: domainEvent(interviewId, "claims.verified", { claimIds }),
         });

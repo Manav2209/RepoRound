@@ -80,7 +80,7 @@ export default function InterviewResult({
           <p className="hint">
             {score !== null
               ? "Average of the assessed categories. Unassessed areas are excluded."
-              : "This is not a zero score. Try regenerating the assessment or complete a longer interview."}
+              : "This is not a zero score. A longer practice round may provide more evidence."}
           </p>
           <div className="score-coverage">
             <span>Assessment coverage</span>

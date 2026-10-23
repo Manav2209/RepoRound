@@ -4,6 +4,7 @@ import type {
   InterviewObjective,
   InterviewState,
 } from "./interview.types.js";
+import type { MemoryFact } from "./memory-facts.js";
 
 function terms(text: string): string[] {
   return text
@@ -69,4 +70,25 @@ export function selectRelevantEvidence(
     .sort((a, b) => b.score - a.score || b.index - a.index)
     .slice(0, limit)
     .map(({ evidence }) => evidence);
+}
+
+export function selectRelevantMemoryFacts(
+  state: InterviewState,
+  targetText: string,
+  limit = 4,
+): MemoryFact[] {
+  const target = terms(targetText);
+  const facts = state.memoryFacts ?? [];
+  return facts
+    .map((fact, index) => ({
+      fact,
+      index,
+      score: overlap(`${fact.topic} ${fact.text}`, target) * 3 +
+        (fact.probed ? -2 : 0) +
+        (fact.verification === "contradicted" ? 2 : 0) +
+        index / Math.max(1, facts.length - 1),
+    }))
+    .sort((a, b) => b.score - a.score || b.index - a.index)
+    .slice(0, limit)
+    .map(({ fact }) => fact);
 }

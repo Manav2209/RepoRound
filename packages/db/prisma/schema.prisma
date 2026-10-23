@@ -67,6 +67,7 @@ model Interview {
   domainEvents  InterviewEvent[]
   jobs          InterviewJob[]
   designSubmissions SystemDesignSubmission[]
+  memoryProjection InterviewMemoryProjection?
 
   @@index([githubUrl])
   @@index([mode, status])
@@ -161,6 +162,50 @@ model User {
   sessions      Session[]
   accounts      Account[]
   interviews    Interview[]
+  reports       Report[]
+}
+
+model Report {
+  id          String   @id @default(cuid())
+  interviewId String   @unique
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode        InterviewMode
+  title       String
+  score       Int?
+  dimensions  Json
+  strengths   String[]
+  weaknesses  String[]
+  feedback    String
+  evidence    Json?
+  coverage    Json?
+  summary     Json
+  completedAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([userId, completedAt])
+}
+
+// Deliberately independent of Interview so an interrupted graph delete can retry.
+model InterviewCleanup {
+  interviewId String   @id
+  status      String   @default("pending")
+  attempts    Int      @default(0)
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, updatedAt])
+}
+
+model InterviewMemoryProjection {
+  interviewId String    @id
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  version     Int
+  projectedVersion Int @default(0)
+  updatedAt   DateTime  @updatedAt
+
+  @@index([version, projectedVersion])
 }
 
 model Session {

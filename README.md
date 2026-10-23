@@ -45,7 +45,7 @@ Claim verification checks whether fetched code supports or contradicts a factual
 - Session allocation is serialized in PostgreSQL. The session row exists before LiveKit dispatch.
 - Disconnects allow a configured reconnect window. Heartbeats detect stale workers. Reconnecting restores the pending question and persisted transcript.
 - The browser End action immediately stops further progression. Finalization and evaluation use unique durable job keys, expiring leases, and bounded retries.
-- Failed evaluations can be retried from the result page.
+- Failed evaluations can be retried from the result page while their raw source material is retained. A completed report is final.
 - PostgreSQL jobs allow four total executions, including the initial attempt; lock contention and intentional deferrals do not spend that budget. BullMQ evaluation retries have their own policy.
 - Voice events are journaled until the backend acknowledges them. For durable recovery across container replacement, mount `VOICE_OUTBOX_DIR` on persistent storage. Its default OS temporary directory covers process restarts on the same host.
 
@@ -64,6 +64,8 @@ Repository text and candidate answers are untrusted data. All structured model o
 ## System Design graph (FalkorDB)
 
 System Design mode uses FalkorDB as its topology layer. PostgreSQL remains the source of truth for the interview and the submitted snapshot; the graph is a rebuildable projection used to choose questions. Each accepted canvas snapshot is installed under an immutable `submissionId`, so no two revisions share nodes or edges. The GitHub repository graph described above is a separate, in-memory evidence-only structure and is not stored in FalkorDB.
+
+Interview-scoped candidate facts are also projected to `InterviewFact` nodes in FalkorDB, separately from `DesignComponent` topology. Short summaries and source turn IDs are derived from the canonical PostgreSQL runtime after a committed turn. The question path selects facts from that runtime; graph fact retrieval is disabled until local measurements show a clear benefit. A graph outage leaves the projection pending and does not block questions or evaluation. A missing or corrupt runtime snapshot cannot currently be replayed from a full event log.
 
 ### Data model
 
@@ -160,7 +162,7 @@ Configuration: `FALKORDB_HOST` (default `localhost`), `FALKORDB_PORT` (default `
 
 The evaluation includes technical depth, architecture, debugging, implementation, tradeoff reasoning, and communication. Final grading reads the recorded candidate answers directly, including adjacent speech fragments, instead of trusting speculative live summaries. Every assessed category includes a numeric score, confidence, and quotes checked against the originating candidate turns. Confidence expresses certainty of the assessment, not candidate ability: a clearly weak answer can receive a low score with high confidence. Unsupported categories and scores remain `INSUFFICIENT_EVIDENCE` / `null`; pipeline failures and unexplored objectives are not candidate weaknesses. Overall and dimension scores are calculated from assessed categories, excluding unassessed areas.
 
-The responsive result view includes a skill breakdown, supporting answer quotes, session details, transcript review, and an option to regenerate an assessment of the saved answers.
+The responsive result view includes a skill breakdown, short supporting answer quotes, and session details. A completed evaluation creates an independent account-owned report. Once its durable evaluation intent settles, the backend removes the raw transcript, runtime, repository knowledge, design snapshots, and interview-scoped FalkorDB data through a retryable cleanup intent. Reports can be viewed and deleted from the account page.
 
 Evaluation reads every transcript page. Candidate answers share the model input budget, retaining both the beginning and end of long answers. The completion event records included, omitted and shortened candidate-turn counts. Partial coverage is shown in the result view and feedback, with confidence capped at 0.65; omitted content is not evidence of a weakness. Older assessments without coverage metadata remain readable.
 
@@ -170,7 +172,7 @@ RepoRound requires an email/password account with a verified email. Better Auth 
 
 Interviews belong to the authenticated account; every public interview operation checks ownership on the server. The API never accepts a user ID from the browser. Sign-up, sign-in, resend-verification, and password-reset requests are rate limited per client IP. Password changes and resets revoke existing sessions. Google and GitHub sign-in are enabled only when both provider credentials are configured; implicit email-based account linking is disabled.
 
-Accounts can be deleted from `/account`. Deletion removes the user's DesignComponent graph data first, then cascades through interviews, transcripts, evaluations, sessions, and linked provider accounts. If graph cleanup fails, account deletion stops rather than leaving orphaned data. The authentication migration intentionally deletes pre-auth anonymous browser sessions and interviews instead of guessing an owner.
+Accounts can be deleted from `/account`. Deletion removes remaining interview fact and design graph data first, then cascades through reports, interviews, sessions, and linked provider accounts. If graph cleanup fails, account deletion stops for a retry. The authentication migration intentionally deletes pre-auth anonymous browser sessions and interviews instead of guessing an owner.
 
 The voice worker uses a separate internal bearer token and must supply a session belonging to the interview. The browser never receives server credentials or the internal token. Database-backed rate limits also cover interview creation, public operations, internal events, and candidate turns.
 

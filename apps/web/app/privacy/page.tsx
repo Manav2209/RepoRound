@@ -29,7 +29,8 @@ export default function PrivacyPage() {
           When you start a practice round, we store the repository metadata or
           system design problem, conversation turns, interview state,
           architecture submissions, evaluation results, and related operational
-          records. Repository analysis may include file paths, symbols, and
+          records. Short interview facts are projected to FalkorDB so they can be
+          related within that interview. Repository analysis may include file paths, symbols, and
           bounded code excerpts needed to ground interview questions.
         </p>
       </section>
@@ -48,12 +49,16 @@ export default function PrivacyPage() {
       <section>
         <h2>Retention and deletion</h2>
         <p>
-          Account and interview data is retained until you delete your account.
-          Deleting your account removes your interviews, transcripts,
-          evaluation results, access sessions, linked sign-in accounts, and
-          system design graph data. Finish active interviews before deleting
-          your account. If design graph cleanup fails, deletion stops so you can
-          retry rather than leaving orphaned data.
+          After an assessment is saved, we keep your score, feedback, coverage,
+          and short evidence excerpts in an account-owned report. A background
+          cleanup removes raw turns, interview state, submitted diagrams, and
+          interview graph data. It retries if storage is temporarily unavailable.
+          You can delete individual reports from your account page. Deleting your
+          account removes reports, sessions, linked sign-in accounts, and any
+          remaining interview data. Finish active interviews before deleting
+          your account. This application does not configure database backups;
+          a hosting provider may retain backup copies under its own expiry
+          policy, which the deployment operator must disclose.
         </p>
       </section>
 

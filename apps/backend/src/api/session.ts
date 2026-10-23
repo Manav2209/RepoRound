@@ -46,10 +46,13 @@ export function interviewOwnership() {
     )?.[1];
     if (interviewId) {
       const interview = await prisma.interview.findFirst({
-        where: { id: interviewId, userId },
-        select: { id: true },
+        where: { id: interviewId, userId }, select: { id: true },
       });
-      if (!interview) return c.json({ error: "Interview not found" }, 404);
+      const reportPath = /\/(result|report|transcript)$/.test(c.req.path);
+      const report = interview || !reportPath ? null : await prisma.report.findFirst({
+        where: { interviewId, userId }, select: { id: true },
+      });
+      if (!interview && !report) return c.json({ error: "Interview not found" }, 404);
     }
     const isCreate =
       c.req.method === "POST" && c.req.path === "/api/v1/interviews";

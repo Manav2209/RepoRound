@@ -277,6 +277,19 @@ export const answerAssessmentSchema = z.object({
 });
 
 export const stateSchema = z.object({
+  memoryFacts: z.array(z.object({
+    id: z.string(),
+    sourceTurnId: z.string(),
+    questionId: z.string(),
+    objectiveId: z.string(),
+    topic: z.string().max(100),
+    text: z.string().max(300),
+    observedAt: z.string(),
+    provenance: z.literal("candidate_answer"),
+    confidence: z.number().min(0).max(1),
+    verification: z.enum(["candidate_claim", "supported", "contradicted", "uncertain"]),
+    probed: z.boolean(),
+  })).max(120).optional(),
   mode: z.enum(["GITHUB", "SYSTEM_DESIGN"]).optional(),
   github: githubStateSchema.optional(),
   systemDesign: systemDesignStateSchema.optional(),

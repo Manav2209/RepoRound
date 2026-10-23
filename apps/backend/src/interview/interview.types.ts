@@ -1,4 +1,5 @@
 import type { ArchitectureRevisionDiff, ProblemConfig } from "@repo/voice-types";
+import type { MemoryFact } from "./memory-facts.js";
 
 export type InterviewDifficulty = "EASY" | "MEDIUM" | "HARD" | "EXPERT";
 export type SystemDesignConcern =
@@ -204,6 +205,7 @@ export interface SystemDesignInterviewState {
 }
 
 export interface InterviewState {
+  memoryFacts?: MemoryFact[];
   mode?: "GITHUB" | "SYSTEM_DESIGN";
   github?: GithubInterviewState;
   systemDesign?: SystemDesignInterviewState;

@@ -8,7 +8,7 @@ import { useAuth } from "../../components/auth/AuthProvider";
 import { useAuthCapabilities } from "../../hooks/useAuthCapabilities";
 import { authClient } from "../../lib/auth-client";
 import { authErrorMessage } from "../../lib/auth-errors";
-import { getReports } from "../../lib/api";
+import { deleteReport, getReports } from "../../lib/api";
 import type { ReportListItem } from "../../types/interview";
 
 export function AccountPanel() {
@@ -27,6 +27,7 @@ export function AccountPanel() {
   } | null>(null);
   const [reportsErrorFor, setReportsErrorFor] = useState<string | null>(null);
   const [reportsAttempt, setReportsAttempt] = useState(0);
+  const [reportDeleteError, setReportDeleteError] = useState<string | null>(null);
   const userId = session?.user.id;
   const reports =
     reportsState && reportsState.userId === userId ? reportsState.items : null;
@@ -217,10 +218,22 @@ export function AccountPanel() {
                         : `${report.score}/100`}
                     </span>
                   </Link>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      if (!window.confirm("Delete this report permanently?")) return;
+                      setReportDeleteError(null);
+                      void deleteReport(report.interviewId)
+                        .then(() => setReportsAttempt((attempt) => attempt + 1))
+                        .catch(() => setReportDeleteError("Could not delete the report. Please try again."));
+                    }}
+                  >Delete report</button>
                 </li>
               ))}
             </ul>
           )}
+          {reportDeleteError && <p className="error" role="alert">{reportDeleteError}</p>}
           <Link href="/practice" className="button">
             New practice round
           </Link>
@@ -230,8 +243,8 @@ export function AccountPanel() {
           <div>
             <h2>Delete account</h2>
             <p className="hint">
-              This permanently deletes your account, interview records,
-              transcripts, and design graph data. It cannot be undone.
+              This permanently deletes your account, reports, any remaining
+              interview records, and design graph data. It cannot be undone.
             </p>
           </div>
           {!deleteOpen ? (
