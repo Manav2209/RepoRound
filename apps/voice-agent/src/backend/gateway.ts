@@ -117,6 +117,19 @@ export class BackendGateway {
       `/internal/interviews/${interviewId}/status?sessionId=${encodeURIComponent(sessionId)}`,
     );
   }
+  pendingQuestion(
+    interviewId: string,
+    sessionId: string,
+  ): Promise<
+    QuestionResponse & {
+      phase?: string | null;
+      checkpoint?: boolean;
+    }
+  > {
+    return this.request(
+      `/internal/interviews/${interviewId}/pending?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+  }
 }
 export class BackendRequestError extends Error {
   constructor(readonly status: number) {

@@ -8,7 +8,11 @@ AI_ROUTER_BASE_URL=https://router.example.com/v1
 AI_ROUTER_API_KEY=test-router-key
 AI_ROUTER_MODEL=test-model
 INTERNAL_API_TOKEN=shared-test-token`;
-const backend = `${shared}\nDATABASE_URL="postgresql://test:test@localhost/test?sslmode=require"`;
+const backend = `${shared}
+DATABASE_URL="postgresql://test:test@localhost/test?sslmode=require"
+BETTER_AUTH_SECRET=test-auth-secret-that-is-at-least-32-characters
+RESEND_API_KEY=test-resend-key
+AUTH_EMAIL_FROM=RepoRound <auth@example.com>`;
 const voice = `${shared}\nDEEPGRAM_API_KEY=test-deepgram-key`;
 const origin = "https://example.com";
 
@@ -28,6 +32,9 @@ test("converts Windows dotenv files and quoted Langfuse values into Docker env s
     "LANGFUSE_BASE_URL=https://us.cloud.langfuse.com\n",
   );
   expect(result.backend).toContain(`CORS_ALLOWED_ORIGINS=${origin}\n`);
+  expect(result.backend).toContain(`BETTER_AUTH_URL=${origin}\n`);
+  expect(result.backend).toContain(`AUTH_TRUSTED_ORIGINS=${origin}\n`);
+  expect(result.backend).toContain("AUTH_COOKIE_SECURE=true\n");
   expect(result.voice).toContain("BACKEND_BASE_URL=http://backend:8080\n");
 });
 
@@ -85,4 +92,36 @@ test("rejects multiline secrets and origins that would change proxy routing", ()
   expect(() => prepareEnv(backend, voice, "https://example.com/api")).toThrow(
     "PUBLIC_ORIGIN must be an HTTPS origin",
   );
+});
+
+test("production auth requires email delivery and a persistent strong secret", () => {
+  expect(() =>
+    prepareEnv(
+      backend.replace("RESEND_API_KEY=test-resend-key", ""),
+      voice,
+      origin,
+    ),
+  ).toThrow("RESEND_API_KEY is required");
+  expect(() =>
+    prepareEnv(
+      backend.replace(
+        "BETTER_AUTH_SECRET=test-auth-secret-that-is-at-least-32-characters",
+        "BETTER_AUTH_SECRET=short",
+      ),
+      voice,
+      origin,
+    ),
+  ).toThrow("BETTER_AUTH_SECRET must be at least 32 characters");
+});
+
+test("proxy identity uses a generated private token shared only with backend and Caddy", () => {
+  const result = prepareEnv(backend, voice, origin);
+  const token = result.proxy.match(/TRUSTED_PROXY_TOKEN=([a-f0-9]{64})\n/)?.[1];
+  expect(token).toHaveLength(64);
+  expect(result.backend).toContain(`TRUSTED_PROXY_TOKEN=${token}\n`);
+  expect(result.voice).not.toContain("TRUSTED_PROXY_TOKEN");
+  expect(result.worker).not.toContain("TRUSTED_PROXY_TOKEN");
+  expect(() =>
+    prepareEnv(backend + "\nTRUSTED_PROXY_TOKEN=weak", voice, origin),
+  ).toThrow("TRUSTED_PROXY_TOKEN must be");
 });

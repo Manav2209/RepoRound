@@ -14,6 +14,7 @@ export interface CreateInterviewInput {
   githubUrl: string;
   owner: string;
   name: string;
+  userId: string;
 }
 
 export interface UpdateInterviewStatusInput {

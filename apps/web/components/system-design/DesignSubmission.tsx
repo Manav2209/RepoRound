@@ -21,6 +21,7 @@ export default function DesignSubmission({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const pendingRequest = useRef<{
     requestId: string;
     expectedRevision: number;
@@ -36,12 +37,13 @@ export default function DesignSubmission({
         const data = await getDesign(interviewId, controller.signal);
         if (cancelled) return;
         setDesign(data);
+        setRemainingSeconds(data.remainingSeconds);
         setError(null);
       } catch (err) {
         if (cancelled || controller.signal.aborted) return;
         setError(
           err instanceof ApiError && (err.status === 401 || err.status === 404)
-            ? "This interview is not available in this browser."
+            ? "This interview is not available on your account."
             : "We couldn't load the design problem. Please retry.",
         );
       } finally {
@@ -54,6 +56,15 @@ export default function DesignSubmission({
       controller.abort();
     };
   }, [interviewId, revision]);
+
+  useEffect(() => {
+    if (remainingSeconds === null || variant !== "initial") return;
+    const timer = setTimeout(
+      () => setRemainingSeconds((value) => Math.max(0, (value ?? 0) - 1)),
+      1000,
+    );
+    return () => clearTimeout(timer);
+  }, [remainingSeconds, variant]);
 
   async function handleSubmit(snapshot: ArchitectureSnapshot): Promise<void> {
     if (!design) return;
@@ -91,7 +102,7 @@ export default function DesignSubmission({
         err instanceof ApiError && err.status === 409
           ? "A newer version of this design already exists."
           : err instanceof ApiError && err.status === 503
-            ? "The graph service is unavailable. Please try again."
+            ? "The submission could not be saved. Please try again."
             : "We couldn't submit your design. Please review it and try again.",
       );
     }
@@ -138,11 +149,29 @@ export default function DesignSubmission({
             <h2>{design.problem.title}</h2>
             <span className="badge">{design.problem.difficulty}</span>
           </div>
+          <p className="hint" role="timer">
+            {remainingSeconds === null
+              ? "Loading time remaining…"
+              : `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, "0")} remaining for drawing and discussion`}
+          </p>
           <p>{design.problem.brief}</p>
+          <p className="hint">
+            State any reasonable missing assumptions. You can use any architecture that meets the requirements.
+          </p>
           {design.problem.visibleRequirements.length > 0 && (
             <ul className="requirement-list">
               {design.problem.visibleRequirements.map((requirement) => (
                 <li key={requirement}>{requirement}</li>
+              ))}
+            </ul>
+          )}
+          <p className="hint">
+            Assumption: {design.problem.loadAssumption}
+          </p>
+          {design.problem.constraints.length > 0 && (
+            <ul className="requirement-list">
+              {design.problem.constraints.map((constraint) => (
+                <li key={constraint}>{constraint}</li>
               ))}
             </ul>
           )}

@@ -3,7 +3,7 @@ import type {
   ProblemSummary,
 } from "@repo/voice-types";
 
-export const PROBLEM_VERSION = 1 as const;
+export const PROBLEM_VERSION = 2;
 
 const UNLISTED_CLARIFICATION =
   "Make a reasonable assumption, state it, and continue.";
@@ -22,6 +22,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "Requests are routed to the correct channel (email, SMS, push).",
       "The system tolerates temporary provider failures.",
       "Duplicate notifications are handled reasonably.",
+    ],
+    loadAssumption:
+      "About 1 million notification requests per day, with short peaks around 200 requests per second.",
+    constraints: [
+      "Accept requests quickly; delivery is asynchronous from acceptance.",
+      "Providers may fail temporarily, and duplicate requests are possible.",
+      "User channel preferences and opt-outs exist. Exactly-once third-party delivery is not guaranteed.",
     ],
     clarificationAnswers: {
       scale:
@@ -42,7 +49,7 @@ export const PROBLEMS: ProblemConfig[] = [
     challenge: {
       id: "sms-provider-outage",
       prompt:
-        "The SMS provider is down for 30 minutes. Explain what happens to pending notifications, then update your design to recover without duplicate bursts.",
+        "The SMS provider is down for 30 minutes during peak traffic. What happens to accepted SMS requests, and how would your design recover without a burst of duplicates?",
       targetConcepts: ["retry", "backoff", "dead-letter", "idempotency"],
     },
   },
@@ -57,6 +64,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "Creating a short link is fast and returns a unique code.",
       "Redirects are low latency and highly available.",
       "The system scales reads far beyond writes.",
+    ],
+    loadAssumption:
+      "About 10 million new links per day and roughly 1 billion redirects per day (100:1 reads to writes).",
+    constraints: [
+      "Redirects should be low latency and highly available.",
+      "Links may optionally expire; assume a reasonable default.",
+      "Creation must return a unique code and stay fast.",
     ],
     clarificationAnswers: {
       readWrite:
@@ -89,6 +103,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "The limiter does not become a single point of failure.",
       "Limiting decisions are fast on the request path.",
     ],
+    loadAssumption:
+      "Up to about 100,000 requests per second across the fleet, with limits tracked per client API key.",
+    constraints: [
+      "Any standard algorithm is acceptable if its trade-offs are explained.",
+      "Slight over-admission under races is acceptable; state your tolerance.",
+      "A limiter-store outage must not block all API traffic.",
+    ],
     clarificationAnswers: {
       algorithm:
         "Any standard algorithm is acceptable; state the trade-offs you chose.",
@@ -120,6 +141,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "Message ordering is consistent per conversation.",
       "The system supports presence and offline delivery.",
     ],
+    loadAssumption:
+      "Millions of concurrent connections, with a typical user active in a handful of conversations.",
+    constraints: [
+      "Per-conversation ordering is required; global ordering is not.",
+      "Messages must be durable enough for offline delivery.",
+      "Presence can be approximate and may lag.",
+    ],
     clarificationAnswers: {
       scale:
         "Assume millions of concurrent connections; state your assumptions.",
@@ -150,6 +178,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "File metadata is queryable.",
       "Storage scales independently of metadata.",
     ],
+    loadAssumption:
+      "Files up to multiple gigabytes, with storage growing to millions of objects.",
+    constraints: [
+      "Large transfers should be efficient and resumable where practical.",
+      "Files are private by default and shared through explicit access.",
+      "Metadata and object storage must stay consistent enough to detect failed uploads.",
+    ],
     clarificationAnswers: {
       size: "Assume files up to multiple gigabytes; state your assumptions.",
       access: "Files are private by default and shared via explicit access.",
@@ -178,6 +213,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "Jobs are processed at least once with retries.",
       "Failed jobs are moved to a dead-letter path.",
       "Workers can crash without losing jobs.",
+    ],
+    loadAssumption:
+      "About 10,000 jobs per second at peak, with immediate, delayed, and retried work.",
+    constraints: [
+      "At-least-once delivery is acceptable; duplicate execution must be considered.",
+      "Per-key ordering is required only where requested.",
+      "A poison job must be isolated without blocking unrelated work.",
     ],
     clarificationAnswers: {
       ordering:
@@ -209,6 +251,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "New posts appear with acceptable freshness.",
       "The system supports both fan-out on write and read trade-offs.",
     ],
+    loadAssumption:
+      "About 100 million daily active users, with a few accounts having tens of millions of followers.",
+    constraints: [
+      "A reverse-chronological feed is acceptable; ranking is optional.",
+      "Feed reads should stay fast for active users.",
+      "High-follower accounts must not create write-amplification storms.",
+    ],
     clarificationAnswers: {
       scale:
         "Assume a mix of normal users and a few very high-follower accounts; state your assumptions.",
@@ -238,6 +287,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "Driver locations are tracked with low latency.",
       "Riders are matched to suitable nearby drivers.",
       "The system handles supply and demand imbalance.",
+    ],
+    loadAssumption:
+      "About 100,000 active drivers sending location updates every few seconds during peak.",
+    constraints: [
+      "Location updates are frequent and can be slightly stale.",
+      "Matching quality can be approximate; state an acceptable latency.",
+      "A rider must not be assigned two drivers at once.",
     ],
     clarificationAnswers: {
       location:
@@ -270,6 +326,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "Videos are transcoded into multiple renditions.",
       "Playback is fast and reliable globally.",
     ],
+    loadAssumption:
+      "Multi-gigabyte uploads, global viewers, and a small set of very popular videos.",
+    constraints: [
+      "Adaptive bitrate playback is expected.",
+      "Transcoding is asynchronous and may lag under load.",
+      "Uploads must remain durable even when processing fails.",
+    ],
     clarificationAnswers: {
       scale: "Assume large files and global viewers; state your assumptions.",
       quality: "Adaptive bitrate playback is expected.",
@@ -299,6 +362,13 @@ export const PROBLEMS: ProblemConfig[] = [
       "Reservations are held temporarily before payment.",
       "The system stays responsive under contention.",
     ],
+    loadAssumption:
+      "Tens of thousands of users competing for a few thousand seats when a popular event opens.",
+    constraints: [
+      "Seats must never be double-booked.",
+      "Temporary holds expire after a reasonable duration.",
+      "The system must protect inventory and remain responsive during a flash sale.",
+    ],
     clarificationAnswers: {
       contention:
         "Assume a small number of very popular events; state your assumptions.",
@@ -327,12 +397,24 @@ export function getProblem(id: string): ProblemConfig | undefined {
 
 export function problemSummaries(): ProblemSummary[] {
   return PROBLEMS.map(
-    ({ id, title, difficulty, brief, visibleRequirements }) => ({
+    ({
       id,
+      version,
       title,
       difficulty,
       brief,
       visibleRequirements,
+      loadAssumption,
+      constraints,
+    }) => ({
+      id,
+      version,
+      title,
+      difficulty,
+      brief,
+      visibleRequirements,
+      loadAssumption,
+      constraints,
     }),
   );
 }
@@ -340,6 +422,23 @@ export function problemSummaries(): ProblemSummary[] {
 export function problemSummary(id: string): ProblemSummary | null {
   const problem = byId.get(id);
   if (!problem) return null;
-  const { title, difficulty, brief, visibleRequirements } = problem;
-  return { id, title, difficulty, brief, visibleRequirements };
+  const {
+    version,
+    title,
+    difficulty,
+    brief,
+    visibleRequirements,
+    loadAssumption,
+    constraints,
+  } = problem;
+  return {
+    id,
+    version,
+    title,
+    difficulty,
+    brief,
+    visibleRequirements,
+    loadAssumption,
+    constraints,
+  };
 }

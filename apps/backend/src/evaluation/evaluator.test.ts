@@ -18,6 +18,43 @@ const context: EvaluationContext = {
   candidateEvidence: [],
   questionHistory: [],
 };
+
+test("partial input is disclosed, retains the late answer, and caps assessment confidence", async () => {
+  let submitted: Record<string, unknown> | undefined;
+  const fake = {
+    async completeJson(messages: { role: string; content: string }[]) {
+      submitted = JSON.parse(messages[1]!.content);
+      const result = emptyEvaluation();
+      result.evidence.architecture = {
+        level: "BASIC",
+        score: 40,
+        confidence: 0.99,
+        evidenceIds: ["turn-0"],
+        observations: [{ turnId: "turn-0", quote: "Opening explanation" }],
+        explanation: "Explains the boundary",
+      };
+      expect(messages.reduce((n, m) => n + m.content.length, 0)).toBeLessThan(
+        60000,
+      );
+      return result;
+    },
+  } as unknown as LlmClient;
+  const result = await new Evaluator(fake).evaluate({
+    ...context,
+    transcript: [
+      ...Array.from({ length: 40 }, (_, i) => ({
+        id: `turn-${i}`,
+        role: "user" as const,
+        text: "Opening explanation " + "x".repeat(2000),
+      })),
+      { id: "last", role: "user", text: "UNIQUE_FINAL_REASONING" },
+    ],
+  });
+  expect(JSON.stringify(submitted)).toContain("UNIQUE_FINAL_REASONING");
+  expect(result.coverage?.quality).toBe("partial");
+  expect(result.evidence.architecture!.confidence).toBe(0.65);
+  expect(result.feedback).toStartWith("Partial assessment:");
+});
 test("invented evidence IDs cannot produce scores or unsupported strengths", async () => {
   const fake = {
     async completeJson() {

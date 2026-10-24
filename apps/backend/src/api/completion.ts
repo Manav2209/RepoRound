@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { EvaluationService } from "../evaluation/evaluation.service.js";
 import { interviewRepo } from "../db/repositories/interview.repo.js";
+import { prisma } from "@repo/db";
 
 export function createCompletionRouter(evaluations: EvaluationService): Hono {
   const app = new Hono();
@@ -42,6 +43,8 @@ export function createCompletionRouter(evaluations: EvaluationService): Hono {
   });
 
   app.post("/:interviewId/evaluation/retry", async (c) => {
+    if (await prisma.report.findUnique({ where: { interviewId: c.req.param("interviewId") } }))
+      return c.json({ error: "Report is final; start a new interview" }, 409);
     await evaluations.retry(c.req.param("interviewId"));
     return c.json({ status: "completing" });
   });

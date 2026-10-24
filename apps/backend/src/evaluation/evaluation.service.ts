@@ -9,6 +9,22 @@ import { newId } from "../lib/ids.js";
 import { readGithubContext } from "../github/context.js";
 import { getProblem } from "../system-design/problems.js";
 import type { ArchitectureSnapshot } from "@repo/voice-types";
+import { diffArchitectureSnapshots } from "../system-design/diff.js";
+import { problemSummary } from "../system-design/problems.js";
+
+function retainedEvidence(evidence: ReturnType<typeof emptyEvaluation>["evidence"]): Prisma.InputJsonValue {
+  return Object.fromEntries(Object.entries(evidence).map(([dimension, item]) => [
+    dimension,
+    {
+      level: item.level,
+      confidence: item.confidence,
+      explanation: item.explanation.slice(0, 500),
+      observations: (item.observations ?? []).slice(0, 2).map((observation) => ({
+        quote: observation.quote.slice(0, 160),
+      })),
+    },
+  ])) as Prisma.InputJsonValue;
+}
 
 export class EvaluationService {
   private readonly evaluator: Evaluator;
@@ -19,6 +35,8 @@ export class EvaluationService {
   async finalize(
     interviewId: string,
   ): Promise<{ status: "completed" | "failed" | "pending" }> {
+    if (await prisma.report.findUnique({ where: { interviewId } }))
+      return { status: "completed" };
     const result = await prisma.evaluation.findUnique({
       where: { interviewId },
     });
@@ -108,6 +126,8 @@ export class EvaluationService {
   private async runEvaluation(
     interviewId: string,
   ): Promise<{ status: "completed" }> {
+    if (await prisma.report.findUnique({ where: { interviewId } }))
+      return { status: "completed" };
     const previous = await prisma.evaluation.findUnique({
       where: { interviewId },
     });
@@ -123,11 +143,20 @@ export class EvaluationService {
     if (interview.status !== "completing")
       throw new Error("Interview is not ready for evaluation");
     const state = stateSchema.parse(interview.runtime?.data);
-    const turns = await prisma.conversationTurn.findMany({
-      where: { interviewId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: 100,
-    });
+    // Read every page. The evaluator owns explicit, measured model-budget selection.
+    const turns: import("@repo/db").ConversationTurn[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await prisma.conversationTurn.findMany({
+        where: { interviewId },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        take: 100,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      turns.push(...page);
+      if (page.length < 100) break;
+      cursor = page.at(-1)!.id;
+    }
     const candidateIds = new Set(
       turns
         .filter((t) => t.role === "user" && t.analysisStatus === "completed")
@@ -139,7 +168,8 @@ export class EvaluationService {
     const context = readGithubContext(interview.knowledge?.facts);
     const problem =
       interview.mode === "SYSTEM_DESIGN" && interview.systemDesignProblemId
-        ? getProblem(interview.systemDesignProblemId)
+        ? state.systemDesign?.problemSnapshot ??
+          getProblem(interview.systemDesignProblemId)
         : undefined;
     const systemDesign =
       interview.mode === "SYSTEM_DESIGN"
@@ -154,7 +184,7 @@ export class EvaluationService {
                     owner: "",
                     name: problem?.title ?? "System Design",
                     projectSummary: problem
-                      ? `${problem.brief}\n\nRequirements:\n${problem.visibleRequirements.join("\n")}`.slice(
+                      ? `${problem.brief}\n\nRequirements:\n${problem.visibleRequirements.join("\n")}\n\nLoad assumption: ${problem.loadAssumption}\n\nConstraints:\n${problem.constraints.join("\n")}`.slice(
                           0,
                           2500,
                         )
@@ -177,33 +207,38 @@ export class EvaluationService {
                     evidence: [],
                   },
             ...(systemDesign ? { systemDesign } : {}),
+            ...(state.github
+              ? {
+                  github: {
+                    segment: state.github.segment,
+                    mainQuestionsAsked: state.github.mainQuestionsAsked,
+                    mainQuestionsTarget: state.github.mainQuestionsTarget,
+                    followUpsAsked: state.github.followUpsAsked,
+                    appliedQuestionsAsked:
+                      state.github.appliedQuestionsAsked,
+                  },
+                }
+              : {}),
             plan: {
               role: interview.interviewPlan?.role ?? "Software Engineer",
               difficulty: state.difficulty,
-              topics: [],
+              topics: [...new Set(state.objectives.map((o) => o.topic))],
               objectives: state.objectives.map((o) => ({
                 id: o.id,
                 topic: o.topic,
                 description: o.description.slice(0, 200),
                 status: o.status,
+                kind: o.kind,
+                phase: o.phase,
               })),
             },
-            transcript: turns
-              .map((t) => ({
-                id: t.id,
-                role:
-                  t.role === "user"
-                    ? ("user" as const)
-                    : ("assistant" as const),
-                text: t.text.slice(0, t.role === "user" ? 2000 : 500),
-                questionId: t.questionId,
-              }))
-              .filter(
-                ((budget) => (turn) => {
-                  budget -= turn.text.length;
-                  return budget >= 0;
-                })(36000),
-              ),
+            transcript: turns.map((t) => ({
+              id: t.id,
+              role:
+                t.role === "user" ? ("user" as const) : ("assistant" as const),
+              text: t.text,
+              questionId: t.questionId,
+            })),
             candidateEvidence: evidence.map((e) => ({
               ...e,
               evidence: e.evidence.slice(0, 220),
@@ -219,8 +254,25 @@ export class EvaluationService {
           }),
         )
       : emptyEvaluation();
+    const completedAt = interview.completedAt ?? previous?.createdAt ?? new Date();
+    const candidateTurns = turns.filter((turn) => turn.role === "user");
+    const summary = {
+      repository: interview.mode === "SYSTEM_DESIGN"
+        ? problemSummary(interview.systemDesignProblemId ?? "")?.title ?? "System design interview"
+        : interview.owner && interview.name
+          ? `${interview.owner}/${interview.name}`
+          : "Repository interview",
+      candidateTurns: candidateTurns.length,
+      answeredQuestions: new Set(candidateTurns.map((turn) => turn.questionId).filter(Boolean)).size,
+      analyzedTurns: candidateTurns.filter((turn) => turn.analysisStatus === "completed").length,
+      failedAnalyses: candidateTurns.filter((turn) => turn.analysisStatus === "failed").length,
+      durationSeconds: interview.startedAt
+        ? Math.max(0, Math.round((completedAt.getTime() - interview.startedAt.getTime()) / 1000))
+        : null,
+    };
     await prisma.$transaction(async (tx) => {
-      const data = { ...result, dimensions: { ...result.dimensions } };
+      const { coverage, ...assessment } = result;
+      const data = { ...assessment, dimensions: { ...result.dimensions } };
       await tx.evaluation.upsert({
         where: { interviewId },
         create: { interviewId, ...data },
@@ -232,8 +284,7 @@ export class EvaluationService {
           status: "completed",
           error: null,
           evaluationLeaseUntil: null,
-          completedAt:
-            interview.completedAt ?? previous?.createdAt ?? new Date(),
+          completedAt,
         },
       });
       state.phase = "COMPLETED";
@@ -248,7 +299,32 @@ export class EvaluationService {
         data: domainEvent(interviewId, "evaluation.completed", {
           score: result.score,
           evidenceCount: evidence.length,
+          ...(coverage ? { coverage } : {}),
         }),
+      });
+      await tx.report.upsert({
+        where: { interviewId },
+        create: {
+          interviewId,
+          userId: interview.userId,
+          mode: interview.mode,
+          title: summary.repository,
+          score: result.score,
+          dimensions: result.dimensions as unknown as Prisma.InputJsonValue,
+          strengths: result.strengths,
+          weaknesses: result.weaknesses,
+          feedback: result.feedback,
+          evidence: retainedEvidence(result.evidence),
+          coverage: coverage ? coverage as unknown as Prisma.InputJsonValue : Prisma.JsonNull,
+          summary: summary as Prisma.InputJsonValue,
+          completedAt,
+        },
+        update: {},
+      });
+      await tx.interviewCleanup.upsert({
+        where: { interviewId },
+        create: { interviewId },
+        update: {},
       });
     });
     return { status: "completed" };
@@ -258,33 +334,88 @@ export class EvaluationService {
     interviewId: string,
     problem: ReturnType<typeof getProblem>,
     state: ReturnType<typeof stateSchema.parse>,
-  ): Promise<NonNullable<import("./evaluation.types.js").EvaluationContext["systemDesign"]>> {
+  ): Promise<
+    NonNullable<
+      import("./evaluation.types.js").EvaluationContext["systemDesign"]
+    >
+  > {
     const submissions = await prisma.systemDesignSubmission.findMany({
       where: { interviewId, graphStatus: "READY" },
       orderBy: { revision: "asc" },
     });
     const summarize = (row: (typeof submissions)[number]) => {
       const snapshot = row.snapshot as unknown as ArchitectureSnapshot;
+      const labels = new Map(
+        snapshot.nodes.map((node) => [node.id, node.data.label]),
+      );
+      const edge = (id: string) => ({
+        id,
+        label: labels.get(id) ?? id,
+      });
       return {
-        nodes: snapshot.nodes.length,
-        edges: snapshot.edges.length,
-        components: snapshot.nodes.map((n) => n.data.label).slice(0, 75),
+        revision: row.revision,
+        nodeCount: snapshot.nodes.length,
+        edgeCount: snapshot.edges.length,
+        nodes: snapshot.nodes.slice(0, 75).map((node) => ({
+          id: node.id,
+          label: node.data.label,
+          componentType: node.data.componentType,
+        })),
+        edges: snapshot.edges.slice(0, 150).map((item) => ({
+          source: edge(item.source),
+          target: edge(item.target),
+        })),
       };
     };
-    const revision1 = submissions.find((s) => s.revision === 1);
-    const revision2 = submissions.find((s) => s.revision === 2);
+    const revisions = submissions.map((row, index) => {
+      const previous = index > 0 ? submissions[index - 1] : undefined;
+      const current = summarize(row);
+      return previous
+        ? {
+            ...current,
+            diff: diffArchitectureSnapshots(
+              previous.snapshot as unknown as ArchitectureSnapshot,
+              row.snapshot as unknown as ArchitectureSnapshot,
+              previous.revision,
+              row.revision,
+            ),
+          }
+        : current;
+    });
+    const sd = state.systemDesign;
     return {
       problemTitle: problem?.title ?? "System design",
+      problemVersion: problem?.version ?? sd?.problemVersion ?? 1,
       brief: problem?.brief ?? "",
       requirements: problem?.visibleRequirements ?? [],
+      loadAssumption: problem?.loadAssumption ?? "",
+      constraints: problem?.constraints ?? [],
       challenge: problem?.challenge.prompt ?? "",
-      probesAsked: state.systemDesign?.probesAsked ?? [],
-      challengeIssued: state.systemDesign?.challengeIssued ?? false,
-      revisionSubmitted: state.systemDesign?.revisionSubmitted ?? false,
-      revision1: revision1
-        ? summarize(revision1)
-        : { nodes: 0, edges: 0, components: [] },
-      ...(revision2 ? { revision2: summarize(revision2) } : {}),
+      probesAsked: sd?.probesAsked ?? [],
+      challengeIssued: sd?.challengeIssued ?? false,
+      revisionSubmitted: sd?.revisionSubmitted ?? false,
+      questionCount: sd?.questionsAsked ?? 0,
+      questionTarget: sd?.questionTarget ?? 2,
+      failureAsked: sd?.failureAsked ?? false,
+      revisions,
+      answerAssessments: (sd?.answerAssessments ?? []).map((assessment) => ({
+        questionId: assessment.questionId,
+        revision: assessment.revision,
+        strength: assessment.strength,
+        concern: assessment.concern,
+        addressedQuestion: assessment.addressedQuestion,
+        consistentWithDiagram: assessment.consistentWithDiagram,
+        claimedGuaranteeOrTradeoff:
+          assessment.claimedGuaranteeOrTradeoff.slice(0, 300),
+        unresolvedAssumption: assessment.unresolvedAssumption?.slice(0, 300),
+      })),
+      checkpoints: (sd?.checkpoints ?? []).map((checkpoint) => ({
+        questionId: checkpoint.questionId,
+        status: checkpoint.status,
+        afterFailure: checkpoint.afterFailure,
+        choice: checkpoint.choice,
+        submittedRevision: checkpoint.submittedRevision,
+      })),
     };
   }
 
@@ -306,6 +437,9 @@ export class EvaluationService {
   }
 
   async retry(interviewId: string): Promise<void> {
+    if (await prisma.report.findUnique({ where: { interviewId } }) ||
+        await prisma.interviewCleanup.findUnique({ where: { interviewId } }))
+      throw new Error("Report is final; start a new interview for another assessment");
     await prisma.$transaction(async (tx) => {
       const changed = await tx.interview.updateMany({
         where: {
@@ -355,7 +489,16 @@ export class EvaluationService {
       where: {
         status: "active",
         OR: [
-          { runtime: { deadlineAt: { lte: now } } },
+          {
+            mode: "SYSTEM_DESIGN",
+            runtime: {
+              deadlineAt: { lte: new Date(now.getTime() - 90_000) },
+            },
+          },
+          {
+            mode: "GITHUB",
+            runtime: { deadlineAt: { lte: now } },
+          },
           {
             sessions: {
               some: {

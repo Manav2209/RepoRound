@@ -4,6 +4,7 @@ import { prisma } from "@repo/db";
 import { createRedisConnection } from "./redis.js";
 import { EvaluationRelay, evaluationJobId } from "./evaluation-relay.js";
 import { newId } from "../lib/ids.js";
+import { createTestUser } from "../../test-fixtures/database.js";
 
 // Needs both PostgreSQL (RUN_DB_TESTS) and a reachable BullMQ Redis.
 const enabled = process.env.RUN_DB_TESTS === "1";
@@ -35,18 +36,22 @@ const redisUp = await redisAvailable();
 const suite = test.skipIf(!enabled || !redisUp);
 
 const createdIds: string[] = [];
+const createdUserIds: string[] = [];
 
 afterAll(async () => {
   if (!enabled) return;
   await prisma.interview.deleteMany({ where: { id: { in: createdIds } } });
+  await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   await prisma.$disconnect();
 });
 
 suite(
   "a retained failed BullMQ evaluation runs again with a fresh retry budget",
   async () => {
+    const userId = await createTestUser();
+    createdUserIds.push(userId);
     const interview = await prisma.interview.create({
-      data: { mode: "SYSTEM_DESIGN", status: "completing" },
+      data: { mode: "SYSTEM_DESIGN", status: "completing", userId },
     });
     createdIds.push(interview.id);
     await prisma.interviewJob.create({
@@ -107,15 +112,13 @@ suite(
 );
 
 suite("evaluation relay -> real BullMQ transport", async () => {
-  const interviewId = await new Promise<string>((resolve, reject) => {
-    prisma.interview
-      .create({ data: { mode: "SYSTEM_DESIGN", status: "completing" } })
-      .then((row) => {
-        createdIds.push(row.id);
-        resolve(row.id);
-      })
-      .catch(reject);
+  const userId = await createTestUser();
+  createdUserIds.push(userId);
+  const interview = await prisma.interview.create({
+    data: { mode: "SYSTEM_DESIGN", status: "completing", userId },
   });
+  createdIds.push(interview.id);
+  const interviewId = interview.id;
   await prisma.interviewJob.create({
     data: {
       id: newId("job"),

@@ -61,15 +61,17 @@ model Interview {
   events        RealtimeEvent[]
   evaluation    Evaluation?
   runtime       InterviewRuntime?
-  userId        String?
-  user          BrowserUser? @relation(fields: [userId], references: [id])
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   knowledge     RepositoryKnowledge?
   domainEvents  InterviewEvent[]
   jobs          InterviewJob[]
   designSubmissions SystemDesignSubmission[]
+  memoryProjection InterviewMemoryProjection?
 
   @@index([githubUrl])
   @@index([mode, status])
+  @@index([userId])
 }
 
 model SystemDesignSubmission {
@@ -149,18 +151,105 @@ model ConversationTurn {
   @@index([sessionId])
 }
 
-model BrowserUser {
-  id String @id
-  sessions BrowserAccessSession[]
-  interviews Interview[]
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  interviews    Interview[]
+  reports       Report[]
 }
 
-model BrowserAccessSession {
-  id String @id
-  userId String
-  user BrowserUser @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String @unique
+model Report {
+  id          String   @id @default(cuid())
+  interviewId String   @unique
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode        InterviewMode
+  title       String
+  score       Int?
+  dimensions  Json
+  strengths   String[]
+  weaknesses  String[]
+  feedback    String
+  evidence    Json?
+  coverage    Json?
+  summary     Json
+  completedAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([userId, completedAt])
+}
+
+// Deliberately independent of Interview so an interrupted graph delete can retry.
+model InterviewCleanup {
+  interviewId String   @id
+  status      String   @default("pending")
+  attempts    Int      @default(0)
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, updatedAt])
+}
+
+model InterviewMemoryProjection {
+  interviewId String    @id
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  version     Int
+  projectedVersion Int @default(0)
+  updatedAt   DateTime  @updatedAt
+
+  @@index([version, projectedVersion])
+}
+
+model Session {
+  id        String   @id
   expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
 }
 
 model RepositoryKnowledge {

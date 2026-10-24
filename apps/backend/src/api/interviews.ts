@@ -3,6 +3,9 @@ import { z } from "zod";
 import type { InterviewService } from "../interview/interview.service.js";
 import { getProblem } from "../system-design/problems.js";
 import { getActiveSubmission } from "../system-design/submissions.js";
+import { GithubScraperError } from "../github/github.scraper.js";
+import { serverError } from "./errors.js";
+import { prisma } from "@repo/db";
 
 const createInterviewSchema = z.union([
   z.object({ githubUrl: z.string().min(1).max(2048) }),
@@ -14,6 +17,24 @@ const createInterviewSchema = z.union([
 
 export function createInterviewsRouter(service: InterviewService): Hono {
   const app = new Hono();
+
+  app.get("/", async (c) => {
+    const reports = await prisma.report.findMany({
+      where: { userId: c.get("userId") },
+      orderBy: [{ completedAt: "desc" }, { createdAt: "desc" }],
+      take: 20,
+      select: {
+        interviewId: true,
+        mode: true,
+        title: true,
+        completedAt: true,
+        score: true,
+      },
+    });
+    return c.json({
+      reports,
+    });
+  });
 
   app.post("/", async (c) => {
     const body = await c.req.json().catch(() => null);
@@ -41,8 +62,9 @@ export function createInterviewsRouter(service: InterviewService): Hono {
       );
       return c.json({ interviewId: id, mode: "SYSTEM_DESIGN", status }, 201);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return c.json({ error: message }, 400);
+      if (err instanceof GithubScraperError)
+        return c.json({ error: err.message }, 400);
+      return serverError(c, err);
     }
   });
 

@@ -5,69 +5,39 @@ import type {
   InterviewResult,
   InterviewView,
   ProblemSummary,
+  ReportListItem,
   SessionInfo,
+  TranscriptMessage,
 } from "../types/interview";
 
-const BASE_URL = (
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080"
-).replace(/\/$/, "");
-let accessPromise: Promise<string> | null = null;
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
-async function accessToken(): Promise<string> {
-  const saved = localStorage.getItem("interview-access");
-  if (saved) return saved;
-  if (!accessPromise)
-    accessPromise = fetch(`${BASE_URL}/api/v1/auth/session`, {
-      method: "POST",
-      signal: AbortSignal.timeout(15000),
-    })
-      .then(async (res) => {
-        if (!res.ok)
-          throw new Error("Unable to create an interview access session");
-        const data = (await res.json()) as { token: string };
-        localStorage.setItem("interview-access", data.token);
-        return data.token;
-      })
-      .finally(() => {
-        accessPromise = null;
-      });
-  return accessPromise;
-}
 
 async function request<T>(
   path: string,
-  init?: RequestInit,
-  renewAccess = true,
+  init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  const token = await accessToken();
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...init,
-    signal: init?.signal
-      ? AbortSignal.any([init.signal, AbortSignal.timeout(15000)])
-      : AbortSignal.timeout(15000),
+  const { timeoutMs = 15000, ...options } = init ?? {};
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const res = await fetch(path, {
+    ...options,
+    credentials: "same-origin",
+    signal: options.signal
+      ? AbortSignal.any([options.signal, timeout])
+      : timeout,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
       ...(init?.headers ?? {}),
     },
   });
-
-  if (res.status === 401 && renewAccess) {
-    // Local databases can be replaced while browsers retain their old token.
-    // Only discard the rejected token; another request may have renewed it.
-    if (localStorage.getItem("interview-access") === token)
-      localStorage.removeItem("interview-access");
-    await res.body?.cancel();
-    return request<T>(path, init, false);
-  }
 
   let body: unknown;
   try {
@@ -77,17 +47,30 @@ async function request<T>(
   }
 
   if (!res.ok) {
+    const payload =
+      body && typeof body === "object"
+        ? (body as { error?: unknown; code?: unknown })
+        : null;
     const message =
-      (body &&
-      typeof body === "object" &&
-      "error" in body &&
-      typeof (body as { error: unknown }).error === "string"
-        ? (body as { error: string }).error
-        : null) ?? `Request failed (${res.status})`;
-    throw new ApiError(message, res.status);
+      typeof payload?.error === "string"
+        ? payload.error
+        : `Request failed (${res.status})`;
+    const code = typeof payload?.code === "string" ? payload.code : undefined;
+    if (res.status === 401) redirectSafely("sign-in");
+    if (res.status === 403 && code === "EMAIL_NOT_VERIFIED")
+      redirectSafely("verify-email");
+    throw new ApiError(message, res.status, code);
   }
 
   return body as T;
+}
+
+function redirectSafely(destination: "sign-in" | "verify-email"): void {
+  if (typeof window === "undefined") return;
+  const returnTo = window.location.pathname + window.location.search;
+  window.location.replace(
+    `/${destination}?returnTo=${encodeURIComponent(returnTo)}`,
+  );
 }
 
 export function createInterview(githubUrl: string): Promise<InterviewView> {
@@ -95,6 +78,16 @@ export function createInterview(githubUrl: string): Promise<InterviewView> {
     method: "POST",
     body: JSON.stringify({ githubUrl }),
   });
+}
+
+export function getReports(signal?: AbortSignal): Promise<{
+  reports: ReportListItem[];
+}> {
+  return request("/api/v1/interviews", { signal });
+}
+
+export function deleteReport(interviewId: string): Promise<void> {
+  return request(`/api/v1/interviews/${interviewId}/report`, { method: "DELETE" });
 }
 
 export function getInterview(
@@ -145,9 +138,20 @@ export function submitArchitecture(
     {
       method: "POST",
       body: JSON.stringify(input),
-      signal: AbortSignal.timeout(30000),
+      timeoutMs: 30000,
     },
   );
+}
+
+export function resolveDesignCheckpoint(
+  interviewId: string,
+  checkpointId: string,
+  choice: "CONTINUE" | "EDIT",
+): Promise<{ ended: boolean; status: string; deadlineAt?: string }> {
+  return request(`/api/v1/interviews/${interviewId}/design/checkpoint`, {
+    method: "POST",
+    body: JSON.stringify({ checkpointId, choice }),
+  });
 }
 
 const inFlightSessions = new Map<string, Promise<SessionInfo>>();
@@ -172,11 +176,13 @@ export function endInterview(interviewId: string): Promise<{ status: string }> {
 export function getResult(interviewId: string): Promise<InterviewResult> {
   return request<InterviewResult>(`/api/v1/interviews/${interviewId}/result`);
 }
+
 export function getTranscript(
   interviewId: string,
-): Promise<import("../types/interview").TranscriptMessage[]> {
+): Promise<TranscriptMessage[]> {
   return request(`/api/v1/interviews/${interviewId}/transcript`);
 }
+
 export function retryEvaluation(
   interviewId: string,
 ): Promise<{ status: string }> {

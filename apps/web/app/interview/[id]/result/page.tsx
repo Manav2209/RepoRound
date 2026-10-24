@@ -1,13 +1,9 @@
 "use client";
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
-import { getResult, getTranscript, retryEvaluation } from "../../../../lib/api";
-import type {
-  InterviewResult,
-  TranscriptMessage,
-} from "../../../../types/interview";
+import { getResult, retryEvaluation } from "../../../../lib/api";
+import type { InterviewResult } from "../../../../types/interview";
 import InterviewResultView from "../../../../components/InterviewResult";
-import Transcript from "../../../../components/Transcript";
 
 export default function ResultPage({
   params,
@@ -21,11 +17,6 @@ export default function ResultPage({
   const [evaluationFailed, setEvaluationFailed] = useState(false);
   const [revision, setRevision] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [transcript, setTranscript] = useState<TranscriptMessage[] | null>(
-    null,
-  );
-  const [transcriptError, setTranscriptError] = useState<string | null>(null);
-  const [transcriptBusy, setTranscriptBusy] = useState(false);
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -78,17 +69,6 @@ export default function ResultPage({
       setBusy(false);
     }
   };
-  const showTranscript = async () => {
-    setTranscriptBusy(true);
-    setTranscriptError(null);
-    try {
-      setTranscript(await getTranscript(id));
-    } catch {
-      setTranscriptError("Couldn’t load your transcript. Please try again.");
-    } finally {
-      setTranscriptBusy(false);
-    }
-  };
   return (
     <main className="result-page">
       <div className="page-heading">
@@ -137,7 +117,7 @@ export default function ResultPage({
             type="button"
             disabled={busy}
             onClick={
-              evaluationFailed || result
+              evaluationFailed
                 ? regenerate
                 : () => {
                     setError(null);
@@ -147,27 +127,14 @@ export default function ResultPage({
           >
             {busy
               ? "Restarting…"
-              : evaluationFailed || result
+              : evaluationFailed
                 ? "Retry assessment"
                 : "Retry loading"}
           </button>
         </section>
       )}
       {result ? (
-        <>
-          <InterviewResultView result={result} />
-          <div className="result-actions">
-            <p className="hint">Want a fresh assessment of the same answers?</p>
-            <button
-              className="secondary"
-              type="button"
-              onClick={regenerate}
-              disabled={busy}
-            >
-              {busy ? "Restarting…" : "Regenerate assessment"}
-            </button>
-          </div>
-        </>
+        <InterviewResultView result={result} />
       ) : (
         !error && (
           <section
@@ -189,34 +156,6 @@ export default function ResultPage({
             )}
           </section>
         )
-      )}
-      {(result || error) && (
-        <section className="panel transcript-review">
-          <div className="section-heading">
-            <div>
-              <h2>Conversation transcript</h2>
-              <p className="hint">
-                Review the answers that informed your assessment.
-              </p>
-            </div>
-            {!transcript && (
-              <button
-                type="button"
-                className="secondary"
-                disabled={transcriptBusy}
-                onClick={showTranscript}
-              >
-                {transcriptBusy ? "Loading…" : "View transcript"}
-              </button>
-            )}
-          </div>
-          {transcriptError && (
-            <p className="error" role="alert">
-              {transcriptError}
-            </p>
-          )}
-          {transcript && <Transcript messages={transcript} />}
-        </section>
       )}
     </main>
   );

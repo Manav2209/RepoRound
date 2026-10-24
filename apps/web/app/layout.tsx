@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
-import Link from "next/link";
+import { AuthProvider } from "../components/auth/AuthProvider";
+import SiteHeader from "../components/SiteHeader";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -13,8 +14,12 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "AI Technical Interview",
-  description: "Get interviewed on your actual project.",
+  title: {
+    default: "RepoRound — Practice interviews grounded in your work",
+    template: "%s · RepoRound",
+  },
+  description:
+    "Voice mock interviews about your real repository or a system design challenge, with feedback tied to what you actually said.",
 };
 
 export default function RootLayout({
@@ -25,22 +30,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        <header className="app-header">
-          <Link
-            className="brand"
-            href="/"
-            aria-label="AI Technical Interview home"
-          >
-            <span className="brand-mark" aria-hidden="true">
-              &gt;_
-            </span>
-            <span>
-              Interview<span className="brand-light"> / AI</span>
-            </span>
-          </Link>
-          <span className="header-note">Built around your code.</span>
-        </header>
-        {children}
+        <AuthProvider>
+          <SiteHeader />
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

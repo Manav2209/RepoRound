@@ -51,8 +51,8 @@ export default function PreparingPage({
         ) {
           setError(
             err.status === 401
-              ? "Your browser access session has expired. This interview cannot be loaded with the current session."
-              : "This interview is not available in this browser. Open it in the browser where you created it, or start a new interview.",
+              ? "Your session has expired. Sign in again to continue this interview."
+              : "This interview is not available on your account. Start a new interview or sign in with the account that created it.",
           );
           return;
         }

@@ -13,13 +13,16 @@ import { createResultsRouter } from "./api/results.js";
 import { RealtimeEventService } from "./realtime/events.js";
 import { createInternalRouter } from "./api/internal.js";
 import { InterviewOrchestrator } from "./interview/orchestrator.js";
-import { browserAuthRouter, browserOwnership } from "./api/auth.js";
+import { createAuthCapabilitiesRouter } from "./api/auth.js";
+import {
+  browserSessionMiddleware,
+  interviewOwnership,
+} from "./api/session.js";
+import { createAuth } from "./auth/index.js";
+import { clientIp } from "./api/client-ip.js";
 import { JobWorker } from "./jobs/queue.js";
 import { Queue } from "bullmq";
-import {
-  EvaluationRelay,
-  EVALUATION_QUEUE,
-} from "./jobs/evaluation-relay.js";
+import { EvaluationRelay, EVALUATION_QUEUE } from "./jobs/evaluation-relay.js";
 import { createRedisConnection } from "./jobs/redis.js";
 import { exportTraces } from "./observability/events.js";
 import { prisma } from "@repo/db";
@@ -28,23 +31,37 @@ import {
   createSystemDesignInterviewRouter,
 } from "./api/system-design.js";
 import { configureDesignGraph } from "./system-design/graph.js";
+import { reconcileDesignGraph } from "./system-design/submissions.js";
+import { requestCorrelation, serverError } from "./api/errors.js";
+import { configureMemoryGraph, reconcileMemoryGraph } from "./interview/memory-graph.js";
+import { reconcileInterviewCleanup } from "./interview/cleanup.js";
 
 const config = loadConfig();
+const auth = createAuth(config);
 
 configureDesignGraph({
   host: config.FALKORDB_HOST,
   port: config.FALKORDB_PORT,
   graph: config.FALKORDB_GRAPH,
 });
+configureMemoryGraph({
+  host: config.FALKORDB_HOST,
+  port: config.FALKORDB_PORT,
+  graph: config.FALKORDB_GRAPH,
+});
 
 const llm = new LlmClient(config);
-const interviewService = new InterviewService(llm);
+const interviewService = new InterviewService(
+  llm,
+  config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
+);
 const sessionService = new SessionService(config);
 const evaluationService = new EvaluationService(llm);
 const realtimeEvents = new RealtimeEventService();
 const orchestrator = new InterviewOrchestrator(
   llm,
-  config.INTERVIEW_DURATION_MINUTES,
+  config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
+  config.GITHUB_INTERVIEW_DURATION_MINUTES,
 );
 
 const worker = new JobWorker({
@@ -103,7 +120,35 @@ setInterval(() => {
     .catch(() => {});
 }, 10_000);
 
+let reconcilingDesignGraph = false;
+setInterval(() => {
+  if (reconcilingDesignGraph) return;
+  reconcilingDesignGraph = true;
+  void reconcileDesignGraph()
+    .catch((err: unknown) =>
+      console.error("design graph reconciliation failed", err),
+    )
+    .finally(() => {
+      reconcilingDesignGraph = false;
+    });
+}, 60_000);
+
+let reconcilingMemory = false;
+setInterval(() => {
+  if (reconcilingMemory) return;
+  reconcilingMemory = true;
+  void Promise.allSettled([reconcileMemoryGraph(), reconcileInterviewCleanup()])
+    .then((results) => {
+      for (const result of results)
+        if (result.status === "rejected") console.error("memory reconciliation failed", result.reason);
+    })
+    .catch((error: unknown) => console.error("memory reconciliation failed", error))
+    .finally(() => { reconcilingMemory = false; });
+}, 15_000);
+
 const app = new Hono();
+app.use("*", requestCorrelation);
+app.onError((error, c) => serverError(c, error));
 
 app.use(
   "*",
@@ -113,17 +158,35 @@ app.use(
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
-app.route("/api/v1/auth", browserAuthRouter());
-app.use("/api/v1/interviews", browserOwnership);
-app.use("/api/v1/interviews/*", browserOwnership);
-app.use("/api/v1/system-design", browserOwnership);
-app.use("/api/v1/system-design/*", browserOwnership);
+app.route("/api/v1/auth", createAuthCapabilitiesRouter(config));
+app.on(["GET", "POST"], "/api/auth/*", (c) => {
+  const headers = new Headers(c.req.raw.headers);
+  const ip = clientIp(
+    c.req.raw,
+    (c.env as { remoteAddress?: string } | undefined)?.remoteAddress,
+    config.TRUSTED_PROXY_TOKEN,
+  );
+  headers.set("x-reporound-client-ip", ip);
+  return auth.handler(new Request(c.req.raw, { headers }));
+});
+
+app.use("/api/v1/interviews", browserSessionMiddleware(auth));
+app.use("/api/v1/interviews/:id", browserSessionMiddleware(auth));
+app.use("/api/v1/interviews/:id/*", browserSessionMiddleware(auth));
+app.use("/api/v1/system-design", browserSessionMiddleware(auth));
+app.use("/api/v1/system-design/*", browserSessionMiddleware(auth));
+app.use("/api/v1/interviews", interviewOwnership());
+app.use("/api/v1/interviews/:id", interviewOwnership());
+app.use("/api/v1/interviews/:id/*", interviewOwnership());
 
 app.route("/api/v1/interviews", createInterviewsRouter(interviewService));
 app.route("/api/v1/interviews", createSessionsRouter(sessionService));
 app.route("/api/v1/interviews", createCompletionRouter(evaluationService));
 app.route("/api/v1/interviews", createResultsRouter());
-app.route("/api/v1/interviews", createSystemDesignInterviewRouter());
+app.route(
+  "/api/v1/interviews",
+  createSystemDesignInterviewRouter(orchestrator),
+);
 app.route("/api/v1/system-design", createSystemDesignCatalogRouter());
 app.route(
   "/internal",

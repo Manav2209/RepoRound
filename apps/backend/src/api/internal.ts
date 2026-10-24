@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { BackendConfig } from "../config.js";
-import { internalAuthFromConfig, rateLimit } from "./auth.js";
+import { internalAuthFromConfig, rateLimit } from "./security.js";
 import {
   RealtimeEventService,
   realtimeEventSchema,
@@ -13,6 +13,7 @@ import type { EvaluationService } from "../evaluation/evaluation.service.js";
 import { InterviewBusyError } from "../interview/runtime-lock.js";
 import { prisma } from "@repo/db";
 import { readGithubContext } from "../github/context.js";
+import { stateSchema } from "../interview/schemas.js";
 
 const id = z.string().min(1).max(100);
 export function createInternalRouter(
@@ -110,6 +111,34 @@ export function createInternalRouter(
         Boolean((interview.runtime?.data as { ended?: boolean } | null)?.ended),
       deadlineAt: interview.runtime?.deadlineAt.toISOString(),
     });
+  });
+  app.get("/interviews/:interviewId/pending", async (c) => {
+    await requireSession(
+      c.req.param("interviewId"),
+      c.req.query("sessionId") ?? "",
+    );
+    const runtime = await prisma.interviewRuntime.findUnique({
+      where: { interviewId: c.req.param("interviewId") },
+    });
+    if (!runtime)
+      return c.json({ ended: true, questionId: null, question: null });
+    try {
+      const state = stateSchema.parse(runtime.data);
+      const sd = state.systemDesign;
+      const question = sd?.pendingQuestionId
+        ? state.questions.find((q) => q.id === sd.pendingQuestionId)
+        : null;
+      return c.json({
+        ended: state.ended,
+        questionId: question?.id ?? null,
+        question: question?.text ?? null,
+        phase: sd?.phase ?? null,
+        checkpoint: question?.checkpoint ?? false,
+        deadlineAt: runtime.deadlineAt.toISOString(),
+      });
+    } catch {
+      return c.json({ ended: true, questionId: null, question: null });
+    }
   });
   return app;
 }

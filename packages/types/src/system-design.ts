@@ -49,12 +49,51 @@ export interface SubmitArchitectureRequest {
   snapshot: ArchitectureSnapshot;
 }
 
+export interface ArchitectureNodeRef {
+  id: string;
+  label: string;
+  componentType: ComponentKind;
+}
+
+export interface ArchitectureEdgeRef {
+  source: string;
+  target: string;
+}
+
+export interface ArchitectureRevisionDiff {
+  fromRevision: number;
+  toRevision: number;
+  nodes: {
+    added: ArchitectureNodeRef[];
+    removed: ArchitectureNodeRef[];
+    relabeled: { id: string; before: string; after: string }[];
+    retyped: {
+      id: string;
+      before: ComponentKind;
+      after: ComponentKind;
+    }[];
+  };
+  edges: {
+    added: ArchitectureEdgeRef[];
+    removed: ArchitectureEdgeRef[];
+    reconnected: {
+      edgeId: string;
+      before: ArchitectureEdgeRef;
+      after: ArchitectureEdgeRef;
+    }[];
+  };
+  material: boolean;
+}
+
 export interface ProblemSummary {
   id: string;
+  version: number;
   title: string;
   difficulty: "EASY" | "MEDIUM" | "HARD";
   brief: string;
   visibleRequirements: string[];
+  loadAssumption: string;
+  constraints: string[];
 }
 
 export interface ChallengeConfig {
@@ -64,7 +103,6 @@ export interface ChallengeConfig {
 }
 
 export interface ProblemConfig extends ProblemSummary {
-  version: 1;
   clarificationAnswers: Record<string, string>;
   evaluationGoals: string[];
   challenge: ChallengeConfig;
@@ -73,9 +111,29 @@ export interface ProblemConfig extends ProblemSummary {
 export type SystemDesignPhase =
   | "DESIGN_PENDING"
   | "DISCUSSION"
+  | "CHECKPOINT"
+  | "EDITING"
+  | "FAILURE"
+  | "FINAL_EDIT"
+  | "FINISHED"
   | "REVISION_REQUESTED"
-  | "REVISION_REVIEW"
-  | "FINISHED";
+  | "REVISION_REVIEW";
+
+export type SystemDesignCheckpointStatus =
+  | "AWAITING_CHOICE"
+  | "EDITING"
+  | "SUBMITTED"
+  | "RESOLVED";
+
+export interface SystemDesignCheckpointView {
+  id: string;
+  questionId: string;
+  questionRevision: number;
+  status: SystemDesignCheckpointStatus;
+  choice?: "CONTINUE" | "EDIT";
+  submittedRevision?: number;
+  afterFailure: boolean;
+}
 
 export interface GraphReference {
   componentIds: string[];
@@ -96,14 +154,22 @@ export interface DesignSubmissionResponse {
   revision: number;
   graphStatus: DesignGraphStatus;
   next: "START_INTERVIEW" | "RESUME_INTERVIEW";
+  noChange?: boolean;
 }
 
 export interface DesignView {
   interviewId: string;
   mode: "SYSTEM_DESIGN";
+  status: string;
   problem: ProblemSummary | null;
   activeRevision: number;
   revisionAllowed: boolean;
+  phase: SystemDesignPhase | null;
+  deadlineAt: string | null;
+  remainingSeconds: number;
+  questionCount: number;
+  questionTarget: number;
+  checkpoint: SystemDesignCheckpointView | null;
   submission: {
     submissionId: string;
     revision: number;

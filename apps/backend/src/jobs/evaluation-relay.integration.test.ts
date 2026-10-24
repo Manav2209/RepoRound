@@ -7,6 +7,7 @@ import {
 } from "./evaluation-relay.js";
 import { JobDeferred, JobWorker } from "./queue.js";
 import { newId } from "../lib/ids.js";
+import { createTestUser } from "../../test-fixtures/database.js";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 const describeLive = describe.skipIf(!enabled);
@@ -33,12 +34,15 @@ class FakeQueue implements EvaluationQueue {
 }
 
 const createdIds: string[] = [];
+const createdUserIds: string[] = [];
 
 async function makeInterview(
   mode: "GITHUB" | "SYSTEM_DESIGN",
 ): Promise<string> {
+  const userId = await createTestUser();
+  createdUserIds.push(userId);
   const interview = await prisma.interview.create({
-    data: { mode, status: "completing" },
+    data: { mode, status: "completing", userId },
   });
   createdIds.push(interview.id);
   return interview.id;
@@ -66,6 +70,7 @@ async function makeIntent(
 afterAll(async () => {
   if (!enabled) return;
   await prisma.interview.deleteMany({ where: { id: { in: createdIds } } });
+  await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   await prisma.$disconnect();
 });
 

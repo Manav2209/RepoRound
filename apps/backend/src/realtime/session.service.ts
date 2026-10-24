@@ -25,7 +25,9 @@ export class SessionService {
       Partial<
         Pick<
           BackendConfig,
-          "RECONNECT_WINDOW_SECONDS" | "INTERVIEW_DURATION_MINUTES"
+          | "RECONNECT_WINDOW_SECONDS"
+          | "SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES"
+          | "GITHUB_INTERVIEW_DURATION_MINUTES"
         >
       >,
     private readonly agentName = "ai-interviewer",
@@ -56,12 +58,6 @@ export class SessionService {
       )
         throw new SessionError("Unknown system design problem", 409);
       const now = new Date();
-      if (
-        interview.runtime &&
-        (interview.runtime.deadlineAt <= now ||
-          (interview.runtime.data as { ended?: boolean }).ended)
-      )
-        throw new SessionError("Interview time has ended", 409);
       const existing = await tx.interviewSession.findFirst({
         where: { interviewId },
         orderBy: { createdAt: "desc" },
@@ -74,6 +70,31 @@ export class SessionService {
           (this.cfg.RECONNECT_WINDOW_SECONDS ?? 300) * 1000
       )
         throw new SessionError("Reconnect window has expired", 409);
+      let deadlineAt = interview.runtime?.deadlineAt;
+      if (
+        interview.runtime &&
+        deadlineAt &&
+        existing?.disconnectedAt &&
+        deadlineAt > existing.disconnectedAt
+      ) {
+        const pausedMs = Math.min(
+          now.getTime() - existing.disconnectedAt.getTime(),
+          (this.cfg.RECONNECT_WINDOW_SECONDS ?? 300) * 1000,
+        );
+        if (pausedMs >= 1_000) {
+          deadlineAt = new Date(deadlineAt.getTime() + pausedMs);
+          await tx.interviewRuntime.update({
+            where: { interviewId },
+            data: { deadlineAt },
+          });
+        }
+      }
+      if (
+        interview.runtime &&
+        (deadlineAt! <= now ||
+          (interview.runtime.data as { ended?: boolean }).ended)
+      )
+        throw new SessionError("Interview time has ended", 409);
       if (
         existing?.status === "active" &&
         !existing.disconnectedAt &&
@@ -115,6 +136,8 @@ export class SessionService {
           interview.mode === "SYSTEM_DESIGN" && problem && activeDesign
             ? initialSystemDesignState({
                 problemId: problem.id,
+                problemSnapshot: problem,
+                problemVersion: problem.version,
                 activeRevision: activeDesign.revision,
                 activeSubmissionId: activeDesign.submissionId,
                 objectives: objectivesForProblem(problem),
@@ -123,14 +146,19 @@ export class SessionService {
             : initialState(
                 interview.interviewPlan?.objectives,
                 interview.interviewPlan?.difficulty ?? "mid",
+                {
+                  githubDurationMinutes:
+                    this.cfg.GITHUB_INTERVIEW_DURATION_MINUTES ?? 15,
+                },
               );
+        const durationMinutes =
+          interview.mode === "SYSTEM_DESIGN"
+            ? (this.cfg.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES ?? 15)
+            : (this.cfg.GITHUB_INTERVIEW_DURATION_MINUTES ?? 15);
         await tx.interviewRuntime.create({
           data: {
             interviewId,
-            deadlineAt: new Date(
-              now.getTime() +
-                (this.cfg.INTERVIEW_DURATION_MINUTES ?? 30) * 60_000,
-            ),
+            deadlineAt: new Date(now.getTime() + durationMinutes * 60_000),
             data: initialData as unknown as Prisma.InputJsonValue,
           },
         });
