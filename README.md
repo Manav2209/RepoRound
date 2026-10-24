@@ -1,6 +1,68 @@
-# AI Interviewer
+# RepoRound
 
-A repository-aware technical interviewer with a cascaded voice pipeline and a durable interview orchestrator.
+**Real code. Real architecture decisions. A technical interview that asks better follow-up questions.**
+
+[![CI](https://github.com/Manav2209/RepoRound/actions/workflows/ci.yml/badge.svg)](https://github.com/Manav2209/RepoRound/actions/workflows/ci.yml)
+![Bun](https://img.shields.io/badge/runtime-Bun-111111)
+![Next.js](https://img.shields.io/badge/frontend-Next.js-111111)
+![Status](https://img.shields.io/badge/status-pre--production-orange)
+
+RepoRound is a voice-first technical interview practice platform. Instead of relying only on generic questions, it interviews developers about **their own GitHub projects** or a **system design they build on a canvas**. A backend orchestrator manages the interview, persists answers, asks adaptive follow-up questions, and produces evidence-backed feedback from the actual conversation.
+
+> **Current stage:** Pre-production. Automated checks, Docker images, and an EC2 deployment path exist, but successful builds are not proof of production reliability or security. See [Checks](#checks), [Access and security](#access-and-security), and [EC2 deployment](docs/ec2-deployment.md) before public launch.
+
+## Features
+
+| | Capability | What it does |
+| --- | --- | --- |
+| 🧑‍💻 | **GitHub project interviews** | Analyze a public repository at a pinned commit, ask code-specific questions, and validate factual claims against indexed evidence. |
+| 🏗️ | **System design interviews** | Choose a design challenge, draw a component/flow graph, discuss bottlenecks, and optionally revise the architecture after each answer and the final failure scenario. |
+| 🎙️ | **Real-time voice** | Use LiveKit, Silero VAD, and Deepgram for spoken interviews with interruptions and session reconnection. |
+| 🧠 | **Adaptive interview engine** | Select phases, objectives, difficulty, and follow-ups through application-defined policies with model-assisted question generation. |
+| 📊 | **Evidence-backed results** | Evaluate recorded answers asynchronously, with category scores, confidence, candidate quotations, and an insufficient-evidence state. |
+| 🔄 | **Durable workflows** | Persist interview state and evaluation intent in PostgreSQL; dispatch asynchronous evaluations through Redis/BullMQ. |
+
+## Architecture at a glance
+
+```text
+Next.js candidate UI ───── HTTP ─────> Hono API ─────> PostgreSQL + Prisma
+         │                              │                    │
+         │                              ├── GitHub analysis   └── Interview state
+         │                              ├── Model API             and evaluation intent
+         │                              ├── FalkorDB (design topology)
+         │                              └── Redis / BullMQ ───> Evaluation worker
+         │
+         └──── LiveKit room <──────────────> Voice worker
+                                             ├── Silero VAD
+                                             ├── Deepgram STT / TTS
+                                             └── Backend question orchestration
+```
+
+**Stack:** Bun · TypeScript · Next.js / React · Hono · PostgreSQL / Prisma · Redis / BullMQ · LiveKit · Deepgram · Silero · FalkorDB · Docker · GitHub Actions.
+
+## Quick start
+
+Requirements: Bun 1.4.2, Node.js 24+, PostgreSQL, Redis for BullMQ, and credentials for LiveKit, Deepgram, and an OpenAI-compatible model endpoint. System Design mode also needs FalkorDB.
+
+```bash
+git clone https://github.com/Manav2209/RepoRound.git
+cd RepoRound
+bun install
+cp apps/backend/.env.example apps/backend/.env
+cp apps/voice-agent/.env.example apps/voice-agent/.env
+cp apps/evaluation-worker/.env.example apps/evaluation-worker/.env
+cp packages/db/.env.example packages/db/.env
+```
+
+Fill in the environment files using [Setup](#setup), then generate the Prisma client, apply migrations to your intended database, and start the development services:
+
+```bash
+bun run db:generate
+bun run db:migrate:deploy
+bun run dev
+```
+
+The web app opens at [http://localhost:3000](http://localhost:3000), and the API listens on port 8080. See [Setup](#setup) for authentication and provider settings.
 
 ## Architecture
 
@@ -202,15 +264,15 @@ Database commands are root aliases for scripts in `packages/db`; Prisma dependen
 
 When applying the authentication migration to an existing deployment, stop the backend and voice workers first, take a database backup, apply the migration manually, and start images built from the updated code. The migration deletes anonymous browser sessions and their interviews; it does not assign them to an account. The previous backend requires the removed tables and cannot run against the new schema.
 
-The backend targets 10–15 minutes for GitHub repository interviews and 30 minutes for system-design interviews, with a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero controls answer boundaries with a 1-second silence window, while Deepgram final segments accumulate within an answer (500 ms provider endpointing). Silero also detects interruptions; its defaults require 400 ms of speech and two transcribed words for interruption, reducing accidental cancellation from brief noises.
+The backend targets 10–15 minutes for both GitHub repository and system-design interviews, with a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero VAD controls answer boundaries and detects interruptions.
 
-Start the backend and web app from the repository root:
+Start the backend, web app, voice worker, and evaluation worker from the repository root:
 
 ```bash
 bun run dev
 ```
 
-Start the voice worker separately:
+When running services individually instead, start the voice worker with:
 
 ```bash
 bun run agent:start
@@ -218,7 +280,7 @@ bun run agent:start
 
 The worker dispatch name is `ai-interviewer`. Silero is preloaded once per worker process and reused for its session.
 
-Start the evaluation worker separately as well:
+Start the evaluation worker with:
 
 ```bash
 bun run evaluation-worker:start
