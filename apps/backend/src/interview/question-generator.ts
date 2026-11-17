@@ -4,6 +4,7 @@ import type { LlmClient } from "../llm/llm.client.js";
 import { structured } from "../llm/llm.client.js";
 import { RepositoryKnowledge } from "../github/knowledge.js";
 import type { CodeExcerpt } from "../github/knowledge.js";
+import type { RepositoryContextMode } from "../github/github.scraper.js";
 import { repoGraphProbe } from "../github/graph.js";
 import { emit, withTrace } from "../observability/events.js";
 import { policyFor } from "./policies.js";
@@ -138,7 +139,10 @@ function isGeneric(question: string): boolean {
 }
 
 export class QuestionGenerator {
-  constructor(private readonly llm: LlmClient) {}
+  constructor(
+    private readonly llm: LlmClient,
+    private readonly repositoryContextMode: RepositoryContextMode = "current",
+  ) {}
 
   async generate(
     interviewId: string,
@@ -186,7 +190,12 @@ export class QuestionGenerator {
         /* unreadable or unsafe source path */
       }
     }
-    const tools = new ToolRegistry(interviewId, knowledge, state);
+    const tools = new ToolRegistry(
+      interviewId,
+      knowledge,
+      state,
+      this.repositoryContextMode,
+    );
     let excerpts = sourceExcerpts.slice(0, 6);
     try {
       const found = (await tools.execute("search_code", {

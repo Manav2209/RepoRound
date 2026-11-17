@@ -5,6 +5,7 @@ const baseEnvSchema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
   PORT: z.coerce.number().int().positive().default(8080),
+  REPOSITORY_CONTEXT_MODE: z.enum(["current", "diverse"]).default("current"),
   DATABASE_URL: z.string().min(1),
   AI_ROUTER_BASE_URL: z.string().url(),
   AI_ROUTER_API_KEY: z.string().min(1),

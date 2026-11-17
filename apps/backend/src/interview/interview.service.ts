@@ -1,5 +1,8 @@
 import { prisma, Prisma, type InterviewStatus } from "@repo/db";
-import { GithubScraper } from "../github/github.scraper.js";
+import {
+  GithubScraper,
+  type RepositoryContextMode,
+} from "../github/github.scraper.js";
 import { GithubAnalyzer } from "../github/github.analyzer.js";
 import { InterviewPlanner } from "./interview.planner.js";
 import type { LlmClient } from "../llm/llm.client.js";
@@ -15,14 +18,16 @@ import { initialSystemDesignState } from "./schemas.js";
 import { objectivesForProblem } from "./strategies/system-design.js";
 
 export class InterviewService {
-  private readonly scraper = new GithubScraper();
+  private readonly scraper: GithubScraper;
   private readonly analyzer: GithubAnalyzer;
   private readonly planner: InterviewPlanner;
 
   constructor(
     llm: LlmClient,
     private readonly systemDesignDurationMinutes = 15,
+    repositoryContextMode: RepositoryContextMode = "current",
   ) {
+    this.scraper = new GithubScraper({}, repositoryContextMode);
     this.analyzer = new GithubAnalyzer(llm);
     this.planner = new InterviewPlanner(llm);
   }

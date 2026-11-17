@@ -1,6 +1,7 @@
 import { Prisma, prisma } from "@repo/db";
 import type { SelectedProbe } from "@repo/voice-types";
 import { RepositoryKnowledge } from "../github/knowledge.js";
+import type { RepositoryContextMode } from "../github/github.scraper.js";
 import { newId } from "../lib/ids.js";
 import type { LlmClient } from "../llm/llm.client.js";
 import { domainEvent, emit, withTrace } from "../observability/events.js";
@@ -69,9 +70,10 @@ export class InterviewOrchestrator {
     private readonly llm: LlmClient,
     private readonly durationMinutes = 30,
     private readonly githubDurationMinutes = 15,
+    repositoryContextMode: RepositoryContextMode = "current",
   ) {
     this.analyzer = new AnswerAnalyzer(llm);
-    this.generator = new QuestionGenerator(llm);
+    this.generator = new QuestionGenerator(llm, repositoryContextMode);
   }
   private response(
     state: InterviewState,

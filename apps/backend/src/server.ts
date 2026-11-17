@@ -54,6 +54,7 @@ const llm = new LlmClient(config);
 const interviewService = new InterviewService(
   llm,
   config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
+  config.REPOSITORY_CONTEXT_MODE,
 );
 const sessionService = new SessionService(config);
 const evaluationService = new EvaluationService(llm);
@@ -62,6 +63,7 @@ const orchestrator = new InterviewOrchestrator(
   llm,
   config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
   config.GITHUB_INTERVIEW_DURATION_MINUTES,
+  config.REPOSITORY_CONTEXT_MODE,
 );
 
 const worker = new JobWorker({
