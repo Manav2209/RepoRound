@@ -1,4 +1,5 @@
 import { Prisma, prisma } from "@repo/db";
+import { SYSTEM_DESIGN_MAIN_QUESTIONS } from "../system-design/policy.js";
 import { Evaluator, emptyEvaluation } from "./evaluator.js";
 import type { LlmClient } from "../llm/llm.client.js";
 import { stateSchema } from "../interview/schemas.js";
@@ -395,7 +396,7 @@ export class EvaluationService {
       challengeIssued: sd?.challengeIssued ?? false,
       revisionSubmitted: sd?.revisionSubmitted ?? false,
       questionCount: sd?.questionsAsked ?? 0,
-      questionTarget: sd?.questionTarget ?? 2,
+      questionTarget: sd?.questionTarget ?? SYSTEM_DESIGN_MAIN_QUESTIONS,
       failureAsked: sd?.failureAsked ?? false,
       revisions,
       answerAssessments: (sd?.answerAssessments ?? []).map((assessment) => ({

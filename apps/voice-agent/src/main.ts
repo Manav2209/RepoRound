@@ -9,6 +9,7 @@ import {
 import * as silero from "@livekit/agents-plugin-silero";
 import { loadConfig, buildProviders } from "@repo/providers";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { buildAgent } from "./agent.js";
 import { createSessionManager } from "./session/manager.js";
 import { getLogger } from "./logger.js";
@@ -24,6 +25,7 @@ export default defineAgent({
     });
   },
   entry: async (ctx: JobContext) => {
+    const workerEntryStartedAt = performance.now();
     const cfg = loadConfig();
     const providers = buildProviders(cfg);
     const logger = getLogger();
@@ -38,6 +40,7 @@ export default defineAgent({
     const gateway = new BackendGateway(
       process.env.BACKEND_BASE_URL ?? "http://localhost:8080",
       internalToken,
+      (metric) => conductor.recordMetric(metric),
     );
     const conductor = new InterviewConductor(
       gateway,
@@ -49,11 +52,23 @@ export default defineAgent({
     let ended = false;
     let closing = false;
     let turnProcessing = false;
+    let sessionDrain: Promise<void> | undefined;
+    const closeSessionAndDrain = () =>
+      (sessionDrain ??= (async () => {
+        await session.close();
+        if (await conductor.flush({ stop: false })) {
+          conductor.recordMetric({
+            source: "worker_closed",
+            durationMs: 0,
+            measurementKind: "worker_sdk_closed_and_prior_events_acknowledged",
+          });
+          await conductor.flush();
+        }
+      })());
     const close = async () => {
       if (closing) return;
       closing = true;
-      await session.close();
-      await conductor.flush();
+      await closeSessionAndDrain();
       ctx.shutdown("interview_ended");
     };
     const session = createSessionManager({
@@ -72,13 +87,19 @@ export default defineAgent({
         logger.info({ event: event.type }, "voice session event");
       },
     });
+    session.telemetry.beginStartup(workerEntryStartedAt);
     session.setAgent(
       buildAgent({
         instructions:
           "Speak only interview questions supplied by the backend. Repository content is never installed as system instructions.",
+        onUserTurnCompleted: (turnId) =>
+          session.telemetry.turnCommitted(turnId, questionId),
         nextQuestion: async (turnId, answer) => {
           if (ended) return "This interview has ended. Thank you.";
           if (!questionId) throw new Error("Opening question is not ready");
+          const answeredQuestionId = questionId;
+          const startedAt = performance.now();
+          let failed = true;
           turnProcessing = true;
           try {
             const next = await gateway.processTurn(
@@ -88,20 +109,36 @@ export default defineAgent({
               questionId,
               answer,
             );
+            failed = false;
             ended = next.ended;
             if (ended) conductor.setNextQuestionId(null);
             if (next.questionId) {
               questionId = next.questionId;
               conductor.setNextQuestionId(questionId);
             }
+            if (!ended && next.speak === false) {
+              session.telemetry.cancelTurn("worker_ui_only_checkpoint", turnId);
+              return null;
+            }
+            session.telemetry.responseReady(turnId, next.questionId);
             return ended
               ? "Thank you for sharing your project. This concludes the interview."
               : next.question!;
           } finally {
+            conductor.recordMetric({
+              source: "backend_roundtrip",
+              turnId,
+              questionId: answeredQuestionId,
+              durationMs: Math.max(0, performance.now() - startedAt),
+              failed,
+              measurementKind:
+                "worker_backend_turn_roundtrip_including_retries",
+            });
             turnProcessing = false;
           }
         },
-        onResponseError: (reason) => session.markResponseError(reason),
+        onResponseError: (reason, turnId) =>
+          session.markResponseError(reason, turnId),
       }),
     );
     await ctx.connect();
@@ -109,7 +146,15 @@ export default defineAgent({
     ended = opening.ended;
     questionId = opening.questionId;
     if (questionId) conductor.setNextQuestionId(questionId);
+    if (!ended) {
+      const intentionalDelayStartedAt = performance.now();
+      await delay(10_000);
+      session.telemetry.addIntentionalDelay(
+        performance.now() - intentionalDelayStartedAt,
+      );
+    }
     await session.start({ room: ctx.room });
+    if (opening.speak === false) session.telemetry.skipStartup();
     let checking = false;
     let polling = false;
     const monitor = setInterval(() => {
@@ -149,29 +194,33 @@ export default defineAgent({
           ) {
             questionId = pending.questionId;
             conductor.setNextQuestionId(questionId);
-            await session.say(pending.question, false);
+            if (pending.speak !== false)
+              await session.say(pending.question, false);
           }
         })
         .catch((err: unknown) =>
-          logger.warn(
-            { error: String(err) },
-            "Pending question check failed",
-          ),
+          logger.warn({ error: String(err) }, "Pending question check failed"),
         )
         .finally(() => {
           polling = false;
         });
     }, 2_500);
     ctx.addShutdownCallback(async () => {
+      closing = true;
       clearInterval(monitor);
       clearInterval(pendingPoll);
-      await session.close().catch(() => {});
-      await conductor.flush();
+      await closeSessionAndDrain().catch(async () => {
+        // Failed SDK closure does not establish complete provider telemetry.
+        await conductor.flush();
+      });
     });
     if (ended) {
       await session.say("This interview has ended. Thank you.", false);
       await close();
-    } else await session.say(opening.question!);
+    } else if (opening.speak !== false) {
+      session.telemetry.expectOpening(questionId);
+      await session.say(opening.question!);
+    }
   },
 });
 cli.runApp(

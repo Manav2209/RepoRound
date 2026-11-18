@@ -13,7 +13,7 @@ describe("system design state compatibility", () => {
     });
     expect(state.systemDesign?.phase).toBe("DESIGN_PENDING");
     expect(state.systemDesign?.activeRevision).toBe(0);
-    expect(state.systemDesign?.questionTarget).toBe(2);
+    expect(state.systemDesign?.questionTarget).toBe(3);
     expect(state.systemDesign?.checkpoints).toEqual([]);
     expect(state.processedTurns).toEqual({});
   });

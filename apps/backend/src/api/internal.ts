@@ -134,6 +134,7 @@ export function createInternalRouter(
         question: question?.text ?? null,
         phase: sd?.phase ?? null,
         checkpoint: question?.checkpoint ?? false,
+        speak: !(question?.checkpoint && sd?.problemSnapshot?.questionBank),
         deadlineAt: runtime.deadlineAt.toISOString(),
       });
     } catch {

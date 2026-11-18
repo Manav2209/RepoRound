@@ -1,0 +1,1586 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-11-18T08:25:44.187Z",
+  "updatedAt": "2026-11-18T08:28:18.618Z",
+  "methodology": {
+    "kind": "controlled direct-backend benchmark with live configured model",
+    "model": "openai/gpt-4o-mini-fast",
+    "scriptedCandidate": true,
+    "sharedSupersetDiagram": true,
+    "excludes": [
+      "voice/STT/TTS",
+      "browser/network round trip",
+      "LiveKit dispatch",
+      "BullMQ delivery",
+      "human response/drawing time",
+      "intentional 10-second startup wait"
+    ],
+    "note": "Measures this development machine and provider at this time. Scripted answers and shared diagram test runtime contracts; scores do not measure human candidate quality. Small samples do not establish production SLOs."
+  },
+  "outcomes": [
+    {
+      "problemId": "notification-system",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "url-shortener",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "rate-limiter",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "chat-application",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "file-storage",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "job-queue",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "news-feed",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "ride-hailing",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "video-streaming",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    },
+    {
+      "problemId": "ticket-booking",
+      "completed": true,
+      "questionsAsked": 3,
+      "repeatPassed": true,
+      "silentCheckpoints": 3,
+      "rawCleanupPassed": true,
+      "reportProduced": true
+    }
+  ],
+  "metrics": {
+    "lifecycle": {
+      "recordedRounds": 10,
+      "startedRounds": 10,
+      "completedRounds": 10,
+      "completionRate": 1,
+      "denominator": "recorded rounds with an allocated voice session; unfinished rounds remain in the denominator"
+    },
+    "latency": {
+      "llm.design_assessment": {
+        "count": 30,
+        "meanMs": 2078.895383333334,
+        "p50Ms": 1906.198700000008,
+        "p95Ms": 2613.811699999991,
+        "maxMs": 3649.6102,
+        "observed": 30,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "design_assessment": {
+        "count": 30,
+        "meanMs": 2089.3333333333335,
+        "p50Ms": 1918,
+        "p95Ms": 2618,
+        "maxMs": 3660,
+        "observed": 30,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "candidate_turn": {
+        "count": 30,
+        "meanMs": 2152.5333333333333,
+        "p50Ms": 1980,
+        "p95Ms": 2675,
+        "maxMs": 3747,
+        "observed": 30,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "repeat_request": {
+        "count": 10,
+        "meanMs": 45,
+        "p50Ms": 41,
+        "p95Ms": 73,
+        "maxMs": 73,
+        "observed": 10,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "llm.evaluation": {
+        "count": 15,
+        "meanMs": 5474.763379999999,
+        "p50Ms": 5291.2415,
+        "p95Ms": 8148.771099999984,
+        "maxMs": 8148.771099999984,
+        "observed": 15,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "evaluation": {
+        "count": 10,
+        "meanMs": 8229.4,
+        "p50Ms": 8168,
+        "p95Ms": 11301,
+        "maxMs": 11301,
+        "observed": 10,
+        "failed": 0,
+        "cancelled": 0
+      }
+    },
+    "usage": {
+      "modelRequests": 45,
+      "failedModelRequests": 0,
+      "requestsWithReportedTokens": 45,
+      "inputTokens": 78254,
+      "outputTokens": 11420,
+      "cachedInputTokens": 3712,
+      "sttAudioSeconds": 0,
+      "ttsAudioSeconds": 0,
+      "ttsCharacters": 0,
+      "sttRequests": 0,
+      "ttsRequests": 0,
+      "sttRequestCountComplete": false,
+      "ttsRequestCountComplete": false
+    },
+    "cost": {
+      "knownEstimatedUsd": null,
+      "complete": false,
+      "estimateOnly": true,
+      "note": "Requires configured provider rates and complete billable usage. Not an invoice; cached-token pricing, failed requests and provider-specific billing may differ."
+    },
+    "quality": {
+      "sourceReferenceCoverage": null,
+      "eligibleRepositoryQuestions": 0,
+      "questionsWithValidReferences": 0,
+      "note": "Valid pinned source references are a coverage proxy, not human-rated relevance or factual correctness."
+    },
+    "controls": {
+      "repeatRequestsHandled": 10,
+      "disconnectEvents": 0,
+      "reconnectEvents": 0,
+      "voiceErrorEvents": 0,
+      "retriesObserved": 0,
+      "recoverySuccessRate": null,
+      "note": "Reconnects are observed presence transitions, not proven state recovery. Recovery success requires a controlled test denominator; disconnect counts alone do not establish it."
+    },
+    "coverage": {
+      "roundsWithSummaries": 10,
+      "roundsWithoutSummaries": 0,
+      "samples": 125,
+      "truncatedRounds": 0,
+      "roundsWithWorkerClosure": 0,
+      "firstAudioMeasurement": "voice.response_start is a worker engine-speaking proxy, not browser-audible latency"
+    },
+    "selection": {
+      "includedRounds": 10,
+      "totalRecordedRounds": 10,
+      "limit": 200,
+      "order": "most recent rounds",
+      "busyRoundsNotRefreshed": 0
+    },
+    "runs": [
+      {
+        "interviewId": "int_msf0zme5yjxn00rh",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "ticket-booking",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:28:03.882Z",
+        "completedAt": "2026-11-18T08:28:18.400Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_7a1a2d96-2dda-45fa-b4e6-749ad6211c81",
+              "cancelled": false,
+              "durationMs": 1877.961699999985,
+              "questionId": "q_569uw01f3st7a35n",
+              "inputTokens": 670,
+              "outputTokens": 91,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_7a1a2d96-2dda-45fa-b4e6-749ad6211c81",
+              "cancelled": false,
+              "durationMs": 1884,
+              "questionId": "q_569uw01f3st7a35n"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_7a1a2d96-2dda-45fa-b4e6-749ad6211c81",
+              "cancelled": false,
+              "durationMs": 1965,
+              "questionId": "q_569uw01f3st7a35n"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_0240f203-f07d-4b80-9b77-9214d4fec7bf",
+              "cancelled": false,
+              "durationMs": 49,
+              "questionId": "q_8e5wps924xy1n32v"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_030b681f-d6c7-4ec5-8a5c-dfb6eac1d47c",
+              "cancelled": false,
+              "durationMs": 1840.808400000009,
+              "questionId": "q_8e5wps924xy1n32v",
+              "inputTokens": 613,
+              "outputTokens": 73,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_030b681f-d6c7-4ec5-8a5c-dfb6eac1d47c",
+              "cancelled": false,
+              "durationMs": 1848,
+              "questionId": "q_8e5wps924xy1n32v"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_030b681f-d6c7-4ec5-8a5c-dfb6eac1d47c",
+              "cancelled": false,
+              "durationMs": 1905,
+              "questionId": "q_8e5wps924xy1n32v"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_a5e55b01-0fa4-47b7-9370-5cb926623a50",
+              "cancelled": false,
+              "durationMs": 2613.811699999991,
+              "questionId": "q_k46cx8cxmwbu6kvh",
+              "inputTokens": 616,
+              "outputTokens": 79,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_a5e55b01-0fa4-47b7-9370-5cb926623a50",
+              "cancelled": false,
+              "durationMs": 2618,
+              "questionId": "q_k46cx8cxmwbu6kvh"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_a5e55b01-0fa4-47b7-9370-5cb926623a50",
+              "cancelled": false,
+              "durationMs": 2675,
+              "questionId": "q_k46cx8cxmwbu6kvh"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 7552.037899999996,
+              "inputTokens": 3905,
+              "outputTokens": 573,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 7559
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 32
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_ghx45wxcrmp1krsq",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "video-streaming",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:27:49.454Z",
+        "completedAt": "2026-11-18T08:28:03.652Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_d6719564-93ee-4881-8a7d-e2d0e552805b",
+              "cancelled": false,
+              "durationMs": 1880.927100000001,
+              "questionId": "q_8bycqzes8e61wnjg",
+              "inputTokens": 676,
+              "outputTokens": 101,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_d6719564-93ee-4881-8a7d-e2d0e552805b",
+              "cancelled": false,
+              "durationMs": 1895,
+              "questionId": "q_8bycqzes8e61wnjg"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_d6719564-93ee-4881-8a7d-e2d0e552805b",
+              "cancelled": false,
+              "durationMs": 1947,
+              "questionId": "q_8bycqzes8e61wnjg"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_5c51e9f6-f35f-4aac-9e15-65c002103383",
+              "cancelled": false,
+              "durationMs": 36,
+              "questionId": "q_1sjkmb66cn8axs1f"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_ccb535ca-ed03-43cb-9198-c8d672b4e5eb",
+              "cancelled": false,
+              "durationMs": 1764.210000000006,
+              "questionId": "q_1sjkmb66cn8axs1f",
+              "inputTokens": 612,
+              "outputTokens": 84,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_ccb535ca-ed03-43cb-9198-c8d672b4e5eb",
+              "cancelled": false,
+              "durationMs": 1777,
+              "questionId": "q_1sjkmb66cn8axs1f"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_ccb535ca-ed03-43cb-9198-c8d672b4e5eb",
+              "cancelled": false,
+              "durationMs": 1830,
+              "questionId": "q_1sjkmb66cn8axs1f"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_d2c15813-0e1e-4e27-97eb-ec55d55e35a9",
+              "cancelled": false,
+              "durationMs": 1799.816299999991,
+              "questionId": "q_sazy22ccqe4s0jad",
+              "inputTokens": 621,
+              "outputTokens": 88,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_d2c15813-0e1e-4e27-97eb-ec55d55e35a9",
+              "cancelled": false,
+              "durationMs": 1806,
+              "questionId": "q_sazy22ccqe4s0jad"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_d2c15813-0e1e-4e27-97eb-ec55d55e35a9",
+              "cancelled": false,
+              "durationMs": 1859,
+              "questionId": "q_sazy22ccqe4s0jad"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 8148.771099999984,
+              "inputTokens": 3908,
+              "outputTokens": 644,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 8168
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 32
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_c7vyr6k1bv58czpe",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "ride-hailing",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:27:33.108Z",
+        "completedAt": "2026-11-18T08:27:49.239Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_3934f586-ac89-4e8d-9449-2007b0b7ba88",
+              "cancelled": false,
+              "durationMs": 1929.454100000003,
+              "questionId": "q_psj4nhjds06jdujv",
+              "inputTokens": 668,
+              "outputTokens": 92,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_3934f586-ac89-4e8d-9449-2007b0b7ba88",
+              "cancelled": false,
+              "durationMs": 1944,
+              "questionId": "q_psj4nhjds06jdujv"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_3934f586-ac89-4e8d-9449-2007b0b7ba88",
+              "cancelled": false,
+              "durationMs": 1999,
+              "questionId": "q_psj4nhjds06jdujv"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_81f3400e-0216-4664-92a3-06cd721cfd37",
+              "cancelled": false,
+              "durationMs": 35,
+              "questionId": "q_anz25tpeenue82ab"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_4de8cc7a-ae4c-421b-8e0f-f93593090176",
+              "cancelled": false,
+              "durationMs": 2032.120699999999,
+              "questionId": "q_anz25tpeenue82ab",
+              "inputTokens": 614,
+              "outputTokens": 100,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_4de8cc7a-ae4c-421b-8e0f-f93593090176",
+              "cancelled": false,
+              "durationMs": 2045,
+              "questionId": "q_anz25tpeenue82ab"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_4de8cc7a-ae4c-421b-8e0f-f93593090176",
+              "cancelled": false,
+              "durationMs": 2094,
+              "questionId": "q_anz25tpeenue82ab"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_27e3872c-28ea-4d8b-ad98-e98558560c48",
+              "cancelled": false,
+              "durationMs": 1851.892400000012,
+              "questionId": "q_3k0ydq3uc9aabh8j",
+              "inputTokens": 612,
+              "outputTokens": 84,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_27e3872c-28ea-4d8b-ad98-e98558560c48",
+              "cancelled": false,
+              "durationMs": 1858,
+              "questionId": "q_3k0ydq3uc9aabh8j"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_27e3872c-28ea-4d8b-ad98-e98558560c48",
+              "cancelled": false,
+              "durationMs": 1916,
+              "questionId": "q_3k0ydq3uc9aabh8j"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 3918.288100000005,
+              "inputTokens": 3940,
+              "outputTokens": 451,
+              "cachedInputTokens": 0
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5773.477299999999,
+              "inputTokens": 3982,
+              "outputTokens": 678,
+              "cachedInputTokens": 3712
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 9708
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 33
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_wnqjg4ru6xjkr7m2",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "news-feed",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:27:16.559Z",
+        "completedAt": "2026-11-18T08:27:32.896Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_6c4af139-2e68-4b38-b843-2d2039572a1a",
+              "cancelled": false,
+              "durationMs": 1905.974199999997,
+              "questionId": "q_0upcq1f3jwqfa87a",
+              "inputTokens": 673,
+              "outputTokens": 88,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_6c4af139-2e68-4b38-b843-2d2039572a1a",
+              "cancelled": false,
+              "durationMs": 1918,
+              "questionId": "q_0upcq1f3jwqfa87a"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_6c4af139-2e68-4b38-b843-2d2039572a1a",
+              "cancelled": false,
+              "durationMs": 1973,
+              "questionId": "q_0upcq1f3jwqfa87a"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_95e6e2e1-57f2-4cbd-a875-e01b830352c8",
+              "cancelled": false,
+              "durationMs": 37,
+              "questionId": "q_0cg3m5d59ham961k"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_103f58bf-3f7c-4d41-8ea0-f6e53236e0c9",
+              "cancelled": false,
+              "durationMs": 2484.835700000011,
+              "questionId": "q_0cg3m5d59ham961k",
+              "inputTokens": 623,
+              "outputTokens": 70,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_103f58bf-3f7c-4d41-8ea0-f6e53236e0c9",
+              "cancelled": false,
+              "durationMs": 2498,
+              "questionId": "q_0cg3m5d59ham961k"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_103f58bf-3f7c-4d41-8ea0-f6e53236e0c9",
+              "cancelled": false,
+              "durationMs": 2552,
+              "questionId": "q_0cg3m5d59ham961k"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_6e6f281b-d991-413a-a1d5-1e89d8f22124",
+              "cancelled": false,
+              "durationMs": 1803.061200000011,
+              "questionId": "q_kumz4jz1sgk21ebb",
+              "inputTokens": 622,
+              "outputTokens": 88,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_6e6f281b-d991-413a-a1d5-1e89d8f22124",
+              "cancelled": false,
+              "durationMs": 1816,
+              "questionId": "q_kumz4jz1sgk21ebb"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_6e6f281b-d991-413a-a1d5-1e89d8f22124",
+              "cancelled": false,
+              "durationMs": 1869,
+              "questionId": "q_kumz4jz1sgk21ebb"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 4129.598400000003,
+              "inputTokens": 3948,
+              "outputTokens": 451,
+              "cachedInputTokens": 0
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5419.414099999995,
+              "inputTokens": 3990,
+              "outputTokens": 637,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 9565
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 33
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_xb7270y5ba4bhq34",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "job-queue",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:27:04.591Z",
+        "completedAt": "2026-11-18T08:27:16.307Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_bc1afe2d-50cd-467d-b261-fffaa3d10dd1",
+              "cancelled": false,
+              "durationMs": 1906.198700000008,
+              "questionId": "q_e8yryhyfsbt153v0",
+              "inputTokens": 672,
+              "outputTokens": 106,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_bc1afe2d-50cd-467d-b261-fffaa3d10dd1",
+              "cancelled": false,
+              "durationMs": 1918,
+              "questionId": "q_e8yryhyfsbt153v0"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_bc1afe2d-50cd-467d-b261-fffaa3d10dd1",
+              "cancelled": false,
+              "durationMs": 1980,
+              "questionId": "q_e8yryhyfsbt153v0"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_1fc7b413-16e4-4020-9c52-98a64e7f9ef8",
+              "cancelled": false,
+              "durationMs": 52,
+              "questionId": "q_aeh58gcpvrdrnxux"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_bd759139-14a7-49d3-a569-c5d680acd06d",
+              "cancelled": false,
+              "durationMs": 2317.428199999995,
+              "questionId": "q_aeh58gcpvrdrnxux",
+              "inputTokens": 622,
+              "outputTokens": 85,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_bd759139-14a7-49d3-a569-c5d680acd06d",
+              "cancelled": false,
+              "durationMs": 2324,
+              "questionId": "q_aeh58gcpvrdrnxux"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_bd759139-14a7-49d3-a569-c5d680acd06d",
+              "cancelled": false,
+              "durationMs": 2386,
+              "questionId": "q_aeh58gcpvrdrnxux"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_08a95e28-1cd3-4276-b703-943d2c54d797",
+              "cancelled": false,
+              "durationMs": 1827.915399999998,
+              "questionId": "q_ma0v64vx18z6138m",
+              "inputTokens": 614,
+              "outputTokens": 83,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_08a95e28-1cd3-4276-b703-943d2c54d797",
+              "cancelled": false,
+              "durationMs": 1836,
+              "questionId": "q_ma0v64vx18z6138m"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_08a95e28-1cd3-4276-b703-943d2c54d797",
+              "cancelled": false,
+              "durationMs": 1903,
+              "questionId": "q_ma0v64vx18z6138m"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 4949.585399999996,
+              "inputTokens": 3912,
+              "outputTokens": 634,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 4962
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 32
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_rvtv52h0qa8r95ue",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "file-storage",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:26:51.924Z",
+        "completedAt": "2026-11-18T08:27:04.317Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_c73aef57-d5e6-4d17-aa82-7a75771e87f5",
+              "cancelled": false,
+              "durationMs": 2199.190199999997,
+              "questionId": "q_acagyqwk7z45y069",
+              "inputTokens": 663,
+              "outputTokens": 89,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_c73aef57-d5e6-4d17-aa82-7a75771e87f5",
+              "cancelled": false,
+              "durationMs": 2212,
+              "questionId": "q_acagyqwk7z45y069"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_c73aef57-d5e6-4d17-aa82-7a75771e87f5",
+              "cancelled": false,
+              "durationMs": 2297,
+              "questionId": "q_acagyqwk7z45y069"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_3e1b3966-4e52-4ec8-8467-b321acc11dc8",
+              "cancelled": false,
+              "durationMs": 41,
+              "questionId": "q_h2a8v6c9cd7pvjen"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_b170a9cc-02b2-49c5-ae27-9f635d3bd497",
+              "cancelled": false,
+              "durationMs": 2129.302500000005,
+              "questionId": "q_h2a8v6c9cd7pvjen",
+              "inputTokens": 604,
+              "outputTokens": 90,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_b170a9cc-02b2-49c5-ae27-9f635d3bd497",
+              "cancelled": false,
+              "durationMs": 2138,
+              "questionId": "q_h2a8v6c9cd7pvjen"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_b170a9cc-02b2-49c5-ae27-9f635d3bd497",
+              "cancelled": false,
+              "durationMs": 2206,
+              "questionId": "q_h2a8v6c9cd7pvjen"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_0861d6d9-f016-4555-955f-5369baea820b",
+              "cancelled": false,
+              "durationMs": 1864.603900000002,
+              "questionId": "q_w3qxbpsv0qt06q7q",
+              "inputTokens": 609,
+              "outputTokens": 84,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_0861d6d9-f016-4555-955f-5369baea820b",
+              "cancelled": false,
+              "durationMs": 1872,
+              "questionId": "q_w3qxbpsv0qt06q7q"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_0861d6d9-f016-4555-955f-5369baea820b",
+              "cancelled": false,
+              "durationMs": 1931,
+              "questionId": "q_w3qxbpsv0qt06q7q"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5372.395799999998,
+              "inputTokens": 3890,
+              "outputTokens": 647,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 5390
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 32
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_5gmdwd9x8r1kwmcg",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "chat-application",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:26:39.716Z",
+        "completedAt": "2026-11-18T08:26:51.655Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_0c428a6a-0b7c-481c-9de7-da1e7dfd5b06",
+              "cancelled": false,
+              "durationMs": 2351.054700000001,
+              "questionId": "q_5dd5n7y4xczg2ung",
+              "inputTokens": 657,
+              "outputTokens": 96,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_0c428a6a-0b7c-481c-9de7-da1e7dfd5b06",
+              "cancelled": false,
+              "durationMs": 2358,
+              "questionId": "q_5dd5n7y4xczg2ung"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_0c428a6a-0b7c-481c-9de7-da1e7dfd5b06",
+              "cancelled": false,
+              "durationMs": 2414,
+              "questionId": "q_5dd5n7y4xczg2ung"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_05a05026-10c1-4b46-b4d6-e964dbbad366",
+              "cancelled": false,
+              "durationMs": 36,
+              "questionId": "q_hymuj8kdf1fvkfh2"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_cf623cef-460b-4a9a-a5a0-dd6f7713fc42",
+              "cancelled": false,
+              "durationMs": 2261.449000000001,
+              "questionId": "q_hymuj8kdf1fvkfh2",
+              "inputTokens": 596,
+              "outputTokens": 84,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_cf623cef-460b-4a9a-a5a0-dd6f7713fc42",
+              "cancelled": false,
+              "durationMs": 2266,
+              "questionId": "q_hymuj8kdf1fvkfh2"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_cf623cef-460b-4a9a-a5a0-dd6f7713fc42",
+              "cancelled": false,
+              "durationMs": 2323,
+              "questionId": "q_hymuj8kdf1fvkfh2"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_2a3495da-780f-4f0c-b87e-e2a09a8fbe89",
+              "cancelled": false,
+              "durationMs": 1802.884400000003,
+              "questionId": "q_p1c74azu0kc7br9b",
+              "inputTokens": 598,
+              "outputTokens": 79,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_2a3495da-780f-4f0c-b87e-e2a09a8fbe89",
+              "cancelled": false,
+              "durationMs": 1817,
+              "questionId": "q_p1c74azu0kc7br9b"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_2a3495da-780f-4f0c-b87e-e2a09a8fbe89",
+              "cancelled": false,
+              "durationMs": 1884,
+              "questionId": "q_p1c74azu0kc7br9b"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 4870.357600000003,
+              "inputTokens": 3895,
+              "outputTokens": 642,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 4878
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 32
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_49d3v1b615a4jecb",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "rate-limiter",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:26:21.870Z",
+        "completedAt": "2026-11-18T08:26:39.406Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_ae165dff-86d2-4524-ba34-180e57607809",
+              "cancelled": false,
+              "durationMs": 1784.3701,
+              "questionId": "q_7cn7rcnecwrn0s8a",
+              "inputTokens": 672,
+              "outputTokens": 79,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_ae165dff-86d2-4524-ba34-180e57607809",
+              "cancelled": false,
+              "durationMs": 1798,
+              "questionId": "q_7cn7rcnecwrn0s8a"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_ae165dff-86d2-4524-ba34-180e57607809",
+              "cancelled": false,
+              "durationMs": 1852,
+              "questionId": "q_7cn7rcnecwrn0s8a"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_298f8f53-019e-48a7-bc52-c767e20952cf",
+              "cancelled": false,
+              "durationMs": 73,
+              "questionId": "q_54v4vwqemvr97kuf"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_8a1c16f2-68f2-46ba-b8df-07d1e0b5c818",
+              "cancelled": false,
+              "durationMs": 2438.056599999996,
+              "questionId": "q_54v4vwqemvr97kuf",
+              "inputTokens": 613,
+              "outputTokens": 85,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_8a1c16f2-68f2-46ba-b8df-07d1e0b5c818",
+              "cancelled": false,
+              "durationMs": 2453,
+              "questionId": "q_54v4vwqemvr97kuf"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_8a1c16f2-68f2-46ba-b8df-07d1e0b5c818",
+              "cancelled": false,
+              "durationMs": 2528,
+              "questionId": "q_54v4vwqemvr97kuf"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_7b84d21e-70f5-420a-acaf-0ac37128f2e9",
+              "cancelled": false,
+              "durationMs": 2308.121899999998,
+              "questionId": "q_13fcuch2bacaj8hw",
+              "inputTokens": 611,
+              "outputTokens": 88,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_7b84d21e-70f5-420a-acaf-0ac37128f2e9",
+              "cancelled": false,
+              "durationMs": 2314,
+              "questionId": "q_13fcuch2bacaj8hw"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_7b84d21e-70f5-420a-acaf-0ac37128f2e9",
+              "cancelled": false,
+              "durationMs": 2369,
+              "questionId": "q_13fcuch2bacaj8hw"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5146.452700000002,
+              "inputTokens": 3926,
+              "outputTokens": 448,
+              "cachedInputTokens": 0
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5171.739199999996,
+              "inputTokens": 3968,
+              "outputTokens": 665,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 10342
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 33
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_sz7nz7v4pvhzqqjt",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "url-shortener",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:26:04.108Z",
+        "completedAt": "2026-11-18T08:26:21.630Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_12cdc8d2-f3de-48d5-9180-db8526447046",
+              "cancelled": false,
+              "durationMs": 1737.889199999998,
+              "questionId": "q_exej4v93u94wwvng",
+              "inputTokens": 673,
+              "outputTokens": 85,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_12cdc8d2-f3de-48d5-9180-db8526447046",
+              "cancelled": false,
+              "durationMs": 1746,
+              "questionId": "q_exej4v93u94wwvng"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_12cdc8d2-f3de-48d5-9180-db8526447046",
+              "cancelled": false,
+              "durationMs": 1854,
+              "questionId": "q_exej4v93u94wwvng"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_45560c94-23c8-44da-b1ea-f71f9470070b",
+              "cancelled": false,
+              "durationMs": 44,
+              "questionId": "q_jzsb0yu8xn5zj8w0"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_0e3a0b1d-ac70-4fe6-8711-6cf89750e69e",
+              "cancelled": false,
+              "durationMs": 2018.8069,
+              "questionId": "q_jzsb0yu8xn5zj8w0",
+              "inputTokens": 612,
+              "outputTokens": 86,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_0e3a0b1d-ac70-4fe6-8711-6cf89750e69e",
+              "cancelled": false,
+              "durationMs": 2034,
+              "questionId": "q_jzsb0yu8xn5zj8w0"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_0e3a0b1d-ac70-4fe6-8711-6cf89750e69e",
+              "cancelled": false,
+              "durationMs": 2108,
+              "questionId": "q_jzsb0yu8xn5zj8w0"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_b8a7fbff-17c3-4477-9d90-c1ea6377cd3a",
+              "cancelled": false,
+              "durationMs": 1682.529399999999,
+              "questionId": "q_4cj1ncvnqkhrvvub",
+              "inputTokens": 616,
+              "outputTokens": 85,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_b8a7fbff-17c3-4477-9d90-c1ea6377cd3a",
+              "cancelled": false,
+              "durationMs": 1697,
+              "questionId": "q_4cj1ncvnqkhrvvub"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_b8a7fbff-17c3-4477-9d90-c1ea6377cd3a",
+              "cancelled": false,
+              "durationMs": 1760,
+              "questionId": "q_4cj1ncvnqkhrvvub"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5773.985000000001,
+              "inputTokens": 3970,
+              "outputTokens": 460,
+              "cachedInputTokens": 0
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5497.070400000004,
+              "inputTokens": 4012,
+              "outputTokens": 735,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 11301
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 33
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      },
+      {
+        "interviewId": "int_h5y2a3s297u2vja4",
+        "mode": "SYSTEM_DESIGN",
+        "problemId": "notification-system",
+        "status": "completed",
+        "startedAt": "2026-11-18T08:25:44.552Z",
+        "completedAt": "2026-11-18T08:26:03.706Z",
+        "summary": {
+          "samples": [
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_55d09484-2d1b-41cd-b8f5-d998ac3c7425",
+              "cancelled": false,
+              "durationMs": 3649.6102,
+              "questionId": "q_c90fbfhwxfkc3178",
+              "inputTokens": 684,
+              "outputTokens": 91,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_55d09484-2d1b-41cd-b8f5-d998ac3c7425",
+              "cancelled": false,
+              "durationMs": 3660,
+              "questionId": "q_c90fbfhwxfkc3178"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_55d09484-2d1b-41cd-b8f5-d998ac3c7425",
+              "cancelled": false,
+              "durationMs": 3747,
+              "questionId": "q_c90fbfhwxfkc3178"
+            },
+            {
+              "failed": false,
+              "metric": "repeat_request",
+              "turnId": "repeat_df4b07b3-c8f3-412c-9e35-2a3ccaa4b0b9",
+              "cancelled": false,
+              "durationMs": 47,
+              "questionId": "q_b0q6k0psab6q06be"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_d3bb4ad1-efc8-4bce-9b7b-b9cd22fca346",
+              "cancelled": false,
+              "durationMs": 1957.8279,
+              "questionId": "q_b0q6k0psab6q06be",
+              "inputTokens": 626,
+              "outputTokens": 95,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_d3bb4ad1-efc8-4bce-9b7b-b9cd22fca346",
+              "cancelled": false,
+              "durationMs": 1971,
+              "questionId": "q_b0q6k0psab6q06be"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_d3bb4ad1-efc8-4bce-9b7b-b9cd22fca346",
+              "cancelled": false,
+              "durationMs": 2032,
+              "questionId": "q_b0q6k0psab6q06be"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.design_assessment",
+              "turnId": "answer_7d8fdf8a-7eb1-4a96-9f29-9861b731c493",
+              "cancelled": false,
+              "durationMs": 2344.748799999999,
+              "questionId": "q_217n8urp5vyd67eu",
+              "inputTokens": 626,
+              "outputTokens": 89,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "design_assessment",
+              "turnId": "answer_7d8fdf8a-7eb1-4a96-9f29-9861b731c493",
+              "cancelled": false,
+              "durationMs": 2359,
+              "questionId": "q_217n8urp5vyd67eu"
+            },
+            {
+              "failed": false,
+              "metric": "candidate_turn",
+              "turnId": "answer_7d8fdf8a-7eb1-4a96-9f29-9861b731c493",
+              "cancelled": false,
+              "durationMs": 2418,
+              "questionId": "q_217n8urp5vyd67eu"
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5291.2415,
+              "inputTokens": 3989,
+              "outputTokens": 413,
+              "cachedInputTokens": 0
+            },
+            {
+              "model": "openai/gpt-4o-mini-fast",
+              "failed": false,
+              "metric": "llm.evaluation",
+              "cancelled": false,
+              "durationMs": 5107.036199999999,
+              "inputTokens": 4031,
+              "outputTokens": 725,
+              "cachedInputTokens": 0
+            },
+            {
+              "failed": false,
+              "metric": "evaluation",
+              "cancelled": false,
+              "durationMs": 10421
+            }
+          ],
+          "coverage": {
+            "truncated": false,
+            "eventsRead": 33
+          },
+          "schemaVersion": 1,
+          "reconnectEvents": 0,
+          "disconnectEvents": 0,
+          "voiceErrorEvents": 0,
+          "repeatRequestsHandled": 1,
+          "workerClosureReceived": false
+        }
+      }
+    ]
+  }
+}

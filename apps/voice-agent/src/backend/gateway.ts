@@ -1,4 +1,5 @@
 import { customAlphabet } from "nanoid";
+import type { VoiceMetric } from "../session/telemetry.js";
 const random = customAlphabet("0123456789abcdefghjkmnpqrstuvwxyz", 16);
 export const newEventId = () => `evt_${random()}`;
 export const newTurnId = () => `turn_${random()}`;
@@ -23,18 +24,31 @@ export interface QuestionResponse {
   questionId?: string;
   question?: string;
   deadlineAt?: string;
+  checkpoint?: boolean;
+  speak?: boolean;
 }
 export class BackendGateway {
   private readonly baseUrl: string;
   constructor(
     baseUrl: string,
     private readonly token: string,
+    private readonly onMetric: (metric: VoiceMetric) => void = () => {},
   ) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
   }
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(
+    path: string,
+    init?: RequestInit,
+    metricContext?: {
+      turnId?: string;
+      questionId?: string;
+      measurementKind: string;
+    },
+  ): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 4; attempt++) {
+      const startedAt = performance.now();
+      let failed = true;
       try {
         const res = await fetch(`${this.baseUrl}${path}`, {
           ...init,
@@ -51,10 +65,31 @@ export class BackendGateway {
           lastError = new Error(
             `Backend temporarily unavailable (${res.status})`,
           );
-        } else return (await res.json()) as T;
+        } else {
+          const value = (await res.json()) as T;
+          failed = false;
+          return value;
+        }
       } catch (err) {
         if (err instanceof BackendRequestError) throw err;
         lastError = err;
+      } finally {
+        // Deliberately do not instrument telemetry delivery, heartbeats or polls:
+        // reporting an HTTP attempt must not recursively generate more attempts.
+        if (metricContext) {
+          try {
+            this.onMetric({
+              source: "backend_attempt",
+              durationMs: Math.max(0, performance.now() - startedAt),
+              ...metricContext,
+              attempt: attempt + 1,
+              requestCount: 1,
+              failed,
+            });
+          } catch {
+            /* metrics are best effort */
+          }
+        }
       }
       if (attempt < 3)
         await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** attempt));
@@ -64,6 +99,9 @@ export class BackendGateway {
   private validateQuestion(value: QuestionResponse): QuestionResponse {
     if (
       typeof value.ended !== "boolean" ||
+      (value.speak !== undefined && typeof value.speak !== "boolean") ||
+      (value.checkpoint !== undefined &&
+        typeof value.checkpoint !== "boolean") ||
       (!value.ended &&
         (typeof value.question !== "string" ||
           !value.question.trim() ||
@@ -92,10 +130,14 @@ export class BackendGateway {
     sessionId: string,
   ): Promise<QuestionResponse> {
     return this.validateQuestion(
-      await this.request(`/internal/interviews/${interviewId}/start`, {
-        method: "POST",
-        body: JSON.stringify({ sessionId }),
-      }),
+      await this.request(
+        `/internal/interviews/${interviewId}/start`,
+        {
+          method: "POST",
+          body: JSON.stringify({ sessionId }),
+        },
+        { measurementKind: "worker_http_start_attempt" },
+      ),
     );
   }
   async processTurn(
@@ -106,10 +148,14 @@ export class BackendGateway {
     text: string,
   ): Promise<QuestionResponse> {
     return this.validateQuestion(
-      await this.request(`/internal/interviews/${interviewId}/turns`, {
-        method: "POST",
-        body: JSON.stringify({ sessionId, turnId, questionId, text }),
-      }),
+      await this.request(
+        `/internal/interviews/${interviewId}/turns`,
+        {
+          method: "POST",
+          body: JSON.stringify({ sessionId, turnId, questionId, text }),
+        },
+        { turnId, questionId, measurementKind: "worker_http_turn_attempt" },
+      ),
     );
   }
   status(interviewId: string, sessionId: string): Promise<{ ended: boolean }> {
@@ -123,7 +169,6 @@ export class BackendGateway {
   ): Promise<
     QuestionResponse & {
       phase?: string | null;
-      checkpoint?: boolean;
     }
   > {
     return this.request(

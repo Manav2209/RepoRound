@@ -1,5 +1,8 @@
 import { afterAll, expect, test } from "bun:test";
-import { createFalkorDesignGraphStore, type DesignGraphStore } from "./graph.js";
+import {
+  createFalkorDesignGraphStore,
+  type DesignGraphStore,
+} from "./graph.js";
 import { selectProbe } from "./probes.js";
 import { getProblem } from "./problems.js";
 import type { ArchitectureSnapshot } from "@repo/voice-types";
@@ -8,14 +11,22 @@ const HOST = process.env.FALKORDB_TEST_HOST ?? "localhost";
 const PORT = Number(process.env.FALKORDB_TEST_PORT ?? 6379);
 const GRAPH = process.env.FALKORDB_TEST_GRAPH ?? "ai_interviewer_test";
 
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
   ]);
 }
 
-const store = createFalkorDesignGraphStore({ host: HOST, port: PORT, graph: GRAPH });
+const store = createFalkorDesignGraphStore({
+  host: HOST,
+  port: PORT,
+  graph: GRAPH,
+});
 const available = await withTimeout(store.ping(), 4000, false);
 
 afterAll(async () => {
@@ -133,23 +144,45 @@ suite("graph reads stay scoped to one immutable submission", async () => {
   expect(await store.components(first)).toHaveLength(4);
 });
 
-suite("real graph facts drive deterministic probe selection", async () => {
-  const submissionId = `sub-${Date.now()}-c`;
-  await scoped(store, submissionId).install();
+suite(
+  "real graph facts drive versioned and legacy deterministic probe selection",
+  async () => {
+    const submissionId = `sub-${Date.now()}-c`;
+    await scoped(store, submissionId).install();
 
-  const components = await store.components(submissionId);
-  const edges = await store.edges(submissionId);
-  const probe = selectProbe({
-    problem: getProblem("notification-system")!,
-    submissionId,
-    revision: 1,
-    components,
-    edges,
-    upstreamByProvider: {},
-    askedProbeIds: [],
-  });
+    const components = await store.components(submissionId);
+    const edges = await store.edges(submissionId);
+    const probe = selectProbe({
+      problem: {
+        ...getProblem("notification-system")!,
+        version: 2,
+        questionBank: undefined,
+      },
+      submissionId,
+      revision: 1,
+      components,
+      edges,
+      upstreamByProvider: {},
+      askedProbeIds: [],
+    });
 
-  expect(probe.probeId).toBe("notif.async-buffer-ack");
-  expect(probe.graphPath).toEqual(["api", "queue", "worker"]);
-  expect(probe.submissionId).toBe(submissionId);
-});
+    expect(probe.probeId).toBe("notif.async-buffer-ack");
+    expect(probe.graphPath).toEqual(["api", "queue", "worker"]);
+    expect(probe.submissionId).toBe(submissionId);
+    const current = selectProbe({
+      problem: getProblem("notification-system")!,
+      submissionId,
+      revision: 1,
+      components,
+      edges,
+      upstreamByProvider: {},
+      askedProbeIds: [],
+    });
+    expect(current.probeId).toBe("notification-system.duplicate-request");
+    expect(
+      current.referencedComponentIds.every((id) =>
+        components.some((component) => component.componentId === id),
+      ),
+    ).toBe(true);
+  },
+);

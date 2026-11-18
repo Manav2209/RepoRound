@@ -16,9 +16,10 @@ export const PHASES: InterviewPhase[] = [
   "COMPLETED",
 ];
 const policies = {
-  INTRO: "Welcome the candidate and ask about their role in the project.",
+  INTRO:
+    "Briefly summarize the submitted project from repository evidence, then ask one concrete technical question. Do not ask for a project introduction or personal ownership.",
   PROJECT_OVERVIEW:
-    "Establish the project purpose, ownership, and main request flow.",
+    "Trace a specific request or state change through the repository. Do not ask what the project does, who uses it, or what the candidate owned.",
   ARCHITECTURE:
     "Ask about boundaries, responsibilities, and failure behavior. Prefer repository evidence.",
   IMPLEMENTATION:

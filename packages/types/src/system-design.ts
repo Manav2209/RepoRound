@@ -94,6 +94,24 @@ export interface ProblemSummary {
   visibleRequirements: string[];
   loadAssumption: string;
   constraints: string[];
+  outOfScope?: string[];
+}
+
+export interface SystemDesignMiddleQuestion {
+  id: string;
+  prompt: string;
+  concern: "FLOW" | "BOTTLENECK" | "STATE" | "TRADEOFF";
+  /** Preferred visible components, not a required solution architecture. */
+  componentKinds: ComponentKind[];
+  pathKinds?: ComponentKind[];
+  /** A sufficiently specific prior answer can cover this mechanism. */
+  coverageTerms?: string[];
+}
+
+export interface SystemDesignQuestionBank {
+  opening: string;
+  middle: SystemDesignMiddleQuestion[];
+  final: string;
 }
 
 export interface ChallengeConfig {
@@ -106,6 +124,8 @@ export interface ProblemConfig extends ProblemSummary {
   clarificationAnswers: Record<string, string>;
   evaluationGoals: string[];
   challenge: ChallengeConfig;
+  /** Optional for persisted snapshots from older catalog versions. */
+  questionBank?: SystemDesignQuestionBank;
 }
 
 export type SystemDesignPhase =
@@ -120,10 +140,7 @@ export type SystemDesignPhase =
   | "REVISION_REVIEW";
 
 export type SystemDesignCheckpointStatus =
-  | "AWAITING_CHOICE"
-  | "EDITING"
-  | "SUBMITTED"
-  | "RESOLVED";
+  "AWAITING_CHOICE" | "EDITING" | "SUBMITTED" | "RESOLVED";
 
 export interface SystemDesignCheckpointView {
   id: string;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES } from "./system-design/policy.js";
 
 const baseEnvSchema = z.object({
   NODE_ENV: z
@@ -36,8 +37,8 @@ const baseEnvSchema = z.object({
     .number()
     .int()
     .min(10)
-    .max(15)
-    .default(15),
+    .max(DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES)
+    .default(DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES),
   GITHUB_INTERVIEW_DURATION_MINUTES: z.coerce
     .number()
     .int()

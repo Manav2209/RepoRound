@@ -1,4 +1,8 @@
-import type { ProblemConfig, SelectedProbe } from "@repo/voice-types";
+import type {
+  ProblemConfig,
+  SelectedProbe,
+  SystemDesignMiddleQuestion,
+} from "@repo/voice-types";
 import type {
   ComponentFact,
   DesignGraphStore,
@@ -14,6 +18,27 @@ export interface ProbeContext {
   edges: EdgeFact[];
   upstreamByProvider: Record<string, UpstreamFact[]>;
   askedProbeIds: string[];
+  /** Only substantive, assessed explanations; not raw keyword claims. */
+  coveredTopics?: string[];
+}
+
+function alreadyExplained(
+  question: SystemDesignMiddleQuestion,
+  answers: string[],
+): boolean {
+  const terms = question.coverageTerms ?? [];
+  if (terms.length < 2) return false;
+  return answers.some((answer) => {
+    const normalized = answer.toLowerCase();
+    if (
+      normalized.trim().split(/\s+/).length < 25 ||
+      /\b(no|not|never|unsure|cannot|can't|don't|doesn't|haven't)\b/.test(
+        normalized,
+      )
+    )
+      return false;
+    return terms.every((term) => normalized.includes(term.toLowerCase()));
+  });
 }
 
 const MAX_HOPS = 5;
@@ -46,8 +71,12 @@ export function findOrderedPath(
   const startKind = sequence[0]!;
   for (const start of components.filter((c) => c.kind === startKind)) {
     const visited = new Set<string>([idOf(start)]);
-    const stack: Array<{ id: string; idx: number; depth: number; path: string[] }> =
-      [{ id: idOf(start), idx: 0, depth: 0, path: [] }];
+    const stack: Array<{
+      id: string;
+      idx: number;
+      depth: number;
+      path: string[];
+    }> = [{ id: idOf(start), idx: 0, depth: 0, path: [] }];
     while (stack.length) {
       const current = stack.pop()!;
       let idx = current.idx;
@@ -94,6 +123,44 @@ export function selectProbe(ctx: ProbeContext): SelectedProbe {
     graphPath,
     reason,
   });
+
+  if (problem.questionBank?.middle.length) {
+    const available = problem.questionBank.middle.filter(
+      (question) => !asked.has(question.id),
+    );
+    const uncovered = available.filter(
+      (question) => !alreadyExplained(question, ctx.coveredTopics ?? []),
+    );
+    // Component kinds are evidence-selection hints, never required products or
+    // mandatory topology. An unfamiliar diagram still gets this problem's
+    // concrete mechanism question without an invented connection.
+    const pool = uncovered.length ? uncovered : available;
+    const selected =
+      pool.find((question) =>
+        components.some((component) =>
+          question.componentKinds.some((kind) => kind === component.kind),
+        ),
+      ) ??
+      pool[0] ??
+      problem.questionBank.middle[0]!;
+    const path = selected.pathKinds
+      ? findOrderedPath(edges, components, selected.pathKinds)
+      : null;
+    const referenced =
+      path ??
+      components
+        .filter((component) =>
+          selected.componentKinds.some((kind) => kind === component.kind),
+        )
+        .map(idOf)
+        .slice(0, 4);
+    return build(
+      selected.id,
+      referenced,
+      path ?? [],
+      `Explore ${selected.id}: ${selected.prompt}`,
+    );
+  }
 
   if (problem.id === "notification-system") {
     const asyncPath = findOrderedPath(edges, components, [
@@ -165,7 +232,10 @@ export function selectProbe(ctx: ProbeContext): SelectedProbe {
       asyncPath,
       "Submission contains an asynchronous worker path; ask about its guarantees.",
     );
-  const dbPath = findOrderedPath(edges, components, ["api_service", "database"]);
+  const dbPath = findOrderedPath(edges, components, [
+    "api_service",
+    "database",
+  ]);
   if (dbPath && !asked.has("generic.data-consistency"))
     return build(
       "generic.data-consistency",
@@ -193,6 +263,7 @@ export async function gatherProbeContext(input: {
   revision: number;
   store: DesignGraphStore;
   askedProbeIds: string[];
+  coveredTopics?: string[];
 }): Promise<ProbeContext> {
   const components = await input.store.components(input.submissionId);
   const edges = await input.store.edges(input.submissionId);
@@ -214,6 +285,7 @@ export async function gatherProbeContext(input: {
     edges,
     upstreamByProvider,
     askedProbeIds: input.askedProbeIds,
+    coveredTopics: input.coveredTopics,
   };
 }
 

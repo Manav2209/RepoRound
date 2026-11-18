@@ -25,7 +25,8 @@ export default function Home() {
             </Link>
           </div>
           <p className="hero-note">
-            Voice-first · 10–15 minutes · Feedback with evidence
+            Voice-first · Repository and system design rounds · Evidence-backed
+            feedback
           </p>
         </div>
         <div className="hero-visual" aria-hidden="true">

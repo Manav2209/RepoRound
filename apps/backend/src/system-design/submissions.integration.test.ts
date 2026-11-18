@@ -153,11 +153,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!enabled) return;
-    await prisma.interview.deleteMany({
-      where: { id: { in: createdInterviewIds } },
-    });
-    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
-    setDesignGraphStore(null);
+  await prisma.interview.deleteMany({
+    where: { id: { in: createdInterviewIds } },
+  });
+  await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  setDesignGraphStore(null);
   await prisma.$disconnect();
 });
 
@@ -251,8 +251,15 @@ suite(
     expect(current.systemDesign?.challengeIssued).toBe(true);
     expect(current.questions.at(-1)?.text).toContain(problem.challenge.prompt);
     expect(current.systemDesign?.selectedProbeIds).toContain(
-      "generic.scaling-fallback",
+      "url-shortener.code-collision",
     );
+    expect(
+      current.questions
+        .filter(
+          (question) => !question.checkpoint && question.reason === "PROBE",
+        )
+        .map((question) => question.text),
+    ).toContain(problem.questionBank!.middle[0]!.prompt);
   },
 );
 
@@ -313,7 +320,8 @@ suite("a revised diagram grounds the next spoken question", async () => {
   const checkpointRow = await prisma.interviewRuntime.findUniqueOrThrow({
     where: { interviewId },
   });
-  const checkpoint = stateSchema.parse(checkpointRow.data).systemDesign?.checkpoint;
+  const checkpoint = stateSchema.parse(checkpointRow.data).systemDesign
+    ?.checkpoint;
   expect(checkpoint?.status).toBe("AWAITING_CHOICE");
   await orchestrator.resolveCheckpoint(interviewId, checkpoint!.id, "EDIT");
   const revised = snapshot();
@@ -331,12 +339,211 @@ suite("a revised diagram grounds the next spoken question", async () => {
   await orchestrator.continueAfterCheckpoint(interviewId, checkpoint!.id);
   const next = await orchestrator.start(interviewId, session.id);
   if (next.ended) throw new Error("Next diagram question missing");
-  expect(next.question).toContain("Link Store");
+  expect(next.question).toBe(problem.questionBank!.middle[0]!.prompt);
   const finalRuntime = await prisma.interviewRuntime.findUniqueOrThrow({
     where: { interviewId },
   });
-  expect(stateSchema.parse(finalRuntime.data).questions.at(-1)?.revision).toBe(2);
+  const revisedState = stateSchema.parse(finalRuntime.data);
+  expect(revisedState.questions.at(-1)?.revision).toBe(2);
+  expect(revisedState.systemDesign?.selectedProbeIds).toContain(
+    "url-shortener.code-collision",
+  );
+  const event = await prisma.interviewEvent.findFirstOrThrow({
+    where: { interviewId, type: "system_design.probe" },
+    orderBy: { createdAt: "desc" },
+  });
+  const provenance = event.payload as Record<string, unknown>;
+  expect(provenance).toMatchObject({
+    probeId: "url-shortener.code-collision",
+    revision: 2,
+    submissionId: second.submissionId,
+  });
+  expect(provenance.referencedComponentIds).toContain("db");
+  expect(provenance.referencedComponentIds).toContain("api");
+  expect(
+    (provenance.referencedComponentIds as string[]).every((id) =>
+      revised.nodes.some((node) => node.id === id),
+    ),
+  ).toBe(true);
+  expect(provenance.graphPath).toEqual([]);
 });
+
+suite(
+  "a v3 round asks exactly three pinned questions, keeps checkpoints silent, and excludes repeats from answers",
+  async () => {
+    const interviewId = await newInterview("SYSTEM_DESIGN");
+    const problem = getProblem("url-shortener")!;
+    const submission = await submitArchitecture({
+      interviewId,
+      request: request(crypto.randomUUID(), 0),
+    });
+    const state = initialSystemDesignState({
+      problemId: problem.id,
+      problemSnapshot: problem,
+      activeRevision: 1,
+      activeSubmissionId: submission.submissionId,
+      objectives: objectivesForProblem(problem),
+    });
+    await prisma.interview.update({
+      where: { id: interviewId },
+      data: { status: "active", systemDesignProblemId: problem.id },
+    });
+    await prisma.interviewRuntime.create({
+      data: {
+        interviewId,
+        data: state as unknown as Prisma.InputJsonValue,
+        deadlineAt: new Date(Date.now() + 30 * 60_000),
+      },
+    });
+    const session = await prisma.interviewSession.create({
+      data: {
+        interviewId,
+        roomName: `test-${interviewId}`,
+        serverUrl: "ws://localhost:7880",
+        status: "active",
+      },
+    });
+    const assessedQuestions: string[] = [];
+    const llm = {
+      async completeJson(messages: Array<{ content: string }>) {
+        const input = JSON.parse(messages[1]!.content) as { question: string };
+        assessedQuestions.push(input.question);
+        return {
+          addressedQuestion: true,
+          claimedGuaranteeOrTradeoff:
+            "The API saves the authoritative mapping before confirming creation.",
+          consistentWithDiagram: true,
+          strength: "STRONG",
+          concern: "STATE",
+        };
+      },
+    } as unknown as LlmClient;
+    const orchestrator = new InterviewOrchestrator(llm);
+    const expected = [
+      problem.questionBank!.opening,
+      problem.questionBank!.middle[0]!.prompt,
+      problem.questionBank!.final,
+    ];
+    const answers = [
+      "The client submits a destination to the API, which writes an authoritative mapping before returning the short code. Later redirects read that mapping and return the destination. The successful creation response means the mapping can already be resolved.",
+      "A unique database constraint decides which write owns the generated code. A losing insert retries a different random code, without overwriting the first mapping. The request returns success only after its own mapping commits, so concurrent requests cannot silently change destinations.",
+      "The hot mapping can be served from replicated caches while the authoritative store remains the durable source. Requests share cache fills instead of stampeding the store, and bounded admission protects the fallback read path when cache capacity is insufficient.",
+    ];
+    let response = await orchestrator.start(interviewId, session.id);
+    if (response.ended) throw new Error("Opening question missing");
+    const replay = await orchestrator.processTurn({
+      interviewId,
+      sessionId: session.id,
+      turnId: newId("test-repeat"),
+      questionId: response.questionId,
+      text: "Can you repeat the question?",
+    });
+    expect(replay).toMatchObject({
+      questionId: response.questionId,
+      question: expected[0],
+      ended: false,
+    });
+    expect(
+      await prisma.conversationTurn.count({
+        where: { interviewId, role: "user" },
+      }),
+    ).toBe(0);
+    for (let index = 0; index < expected.length; index++) {
+      if (response.ended) throw new Error(`Question ${index + 1} missing`);
+      expect(response.question).toBe(expected[index]!);
+      const checkpointResponse = await orchestrator.processTurn({
+        interviewId,
+        sessionId: session.id,
+        turnId: newId("test-answer"),
+        questionId: response.questionId,
+        text: answers[index]!,
+      });
+      expect(checkpointResponse).toMatchObject({
+        ended: false,
+        checkpoint: true,
+        speak: false,
+      });
+      let current = stateSchema.parse(
+        (
+          await prisma.interviewRuntime.findUniqueOrThrow({
+            where: { interviewId },
+          })
+        ).data,
+      );
+      const checkpoint = current.systemDesign!.checkpoint!;
+      expect(checkpoint.status).toBe("AWAITING_CHOICE");
+      expect(checkpoint.afterFailure).toBe(index === 2);
+      expect(current.systemDesign!.questionsAsked).toBe(index + 1);
+      if (index === 0) {
+        if (checkpointResponse.ended) throw new Error("Checkpoint missing");
+        const repeatedFromCheckpoint = await orchestrator.processTurn({
+          interviewId,
+          sessionId: session.id,
+          turnId: newId("test-repeat"),
+          questionId: checkpointResponse.questionId,
+          text: "Sorry. Can you repeat the question?",
+        });
+        expect(repeatedFromCheckpoint).toMatchObject({
+          ended: false,
+          question: expected[0],
+          questionId: response.questionId,
+        });
+        expect(
+          repeatedFromCheckpoint.ended || repeatedFromCheckpoint.speak,
+        ).not.toBe(false);
+        current = stateSchema.parse(
+          (
+            await prisma.interviewRuntime.findUniqueOrThrow({
+              where: { interviewId },
+            })
+          ).data,
+        );
+        expect(current.systemDesign!.questionsAsked).toBe(1);
+        expect(current.systemDesign!.answerAssessments).toHaveLength(1);
+        expect(
+          await prisma.conversationTurn.count({
+            where: { interviewId, role: "user" },
+          }),
+        ).toBe(1);
+      }
+      await orchestrator.resolveCheckpoint(
+        interviewId,
+        checkpoint.id,
+        "CONTINUE",
+      );
+      response = await orchestrator.start(interviewId, session.id);
+    }
+    expect(response.ended).toBe(true);
+    const completed = stateSchema.parse(
+      (
+        await prisma.interviewRuntime.findUniqueOrThrow({
+          where: { interviewId },
+        })
+      ).data,
+    );
+    expect(completed.systemDesign).toMatchObject({
+      questionsAsked: 3,
+      questionTarget: 3,
+      phase: "FINISHED",
+      failureAsked: true,
+    });
+    expect(
+      completed.questions
+        .filter(
+          (question) =>
+            !question.checkpoint && question.concern !== "CLARIFICATION",
+        )
+        .map((question) => question.text),
+    ).toEqual(expected);
+    expect(completed.systemDesign!.answerAssessments).toHaveLength(3);
+    expect(
+      await prisma.conversationTurn.count({
+        where: { interviewId, role: "user" },
+      }),
+    ).toBe(3);
+    expect(assessedQuestions).toEqual(expected);
+  },
+);
 
 suite("submission idempotency", async () => {
   const interviewId = await newInterview("SYSTEM_DESIGN");

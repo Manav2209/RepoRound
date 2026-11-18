@@ -81,9 +81,15 @@ suite("projection outage and cleanup retry preserve the report", async () => {
   expect(await prisma.interview.findUnique({ where: { id: interviewId } })).not.toBeNull();
   expect(await prisma.interviewCleanup.findUnique({ where: { interviewId } })).not.toBeNull();
   graph.fail = false;
+  await prisma.interviewEvent.create({ data: { id: randomUUID(), interviewId, type: "voice.tts", payload: { durationMs: 300, charactersCount: 15 } } });
+  await reconcileInterviewCleanup();
+  expect(await prisma.interview.findUnique({ where: { id: interviewId } })).not.toBeNull();
+  expect(await prisma.interviewCleanup.findUnique({ where: { interviewId } })).not.toBeNull();
+  await prisma.interviewEvent.create({ data: { id: randomUUID(), interviewId, type: "voice.worker_closed", payload: { durationMs: 0 } } });
   await reconcileInterviewCleanup();
   expect(removedDesign).toContain(submissionId);
   expect(await prisma.interview.findUnique({ where: { id: interviewId } })).toBeNull();
+  expect(await prisma.interviewMetrics.findUnique({ where: { interviewId } })).toMatchObject({ userId, status: "completed" });
   expect(await prisma.conversationTurn.count({ where: { interviewId } })).toBe(0);
   expect(await prisma.interviewCleanup.findUnique({ where: { interviewId } })).toBeNull();
   expect(await prisma.report.findUnique({ where: { interviewId } })).toMatchObject({ score: 75, userId });

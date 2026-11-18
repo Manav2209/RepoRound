@@ -3,10 +3,14 @@ import { LiveKitService } from "./livekit.service.js";
 import { newId, newSessionId } from "../lib/ids.js";
 import type { BackendConfig } from "../config.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { initialState, initialSystemDesignState } from "../interview/schemas.js";
+import {
+  initialState,
+  initialSystemDesignState,
+} from "../interview/schemas.js";
 import { getActiveSubmission } from "../system-design/submissions.js";
 import { getProblem } from "../system-design/problems.js";
 import { objectivesForProblem } from "../interview/strategies/system-design.js";
+import { DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES } from "../system-design/policy.js";
 
 export interface StartSessionResult {
   interviewId: string;
@@ -153,7 +157,8 @@ export class SessionService {
               );
         const durationMinutes =
           interview.mode === "SYSTEM_DESIGN"
-            ? (this.cfg.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES ?? 15)
+            ? (this.cfg.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES ??
+              DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES)
             : (this.cfg.GITHUB_INTERVIEW_DURATION_MINUTES ?? 15);
         await tx.interviewRuntime.create({
           data: {
@@ -166,6 +171,18 @@ export class SessionService {
       await tx.interview.update({
         where: { id: interviewId },
         data: { status: "active", startedAt: interview.startedAt ?? now },
+      });
+      await tx.interviewMetrics.upsert({
+        where: { interviewId },
+        create: {
+          interviewId,
+          userId: interview.userId,
+          mode: interview.mode,
+          problemId: interview.systemDesignProblemId,
+          status: "active",
+          startedAt: interview.startedAt ?? now,
+        },
+        update: { status: "active", startedAt: interview.startedAt ?? now },
       });
       return { session, dispatch: true };
     });

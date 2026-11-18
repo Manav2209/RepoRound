@@ -117,6 +117,13 @@ export interface ProblemSummary {
   visibleRequirements: string[];
   loadAssumption: string;
   constraints: string[];
+  outOfScope?: string[];
+}
+
+export interface SystemDesignCatalog {
+  durationMinutes: number;
+  questionTarget: number;
+  problems: ProblemSummary[];
 }
 
 export type SystemDesignPhase =
@@ -131,10 +138,7 @@ export type SystemDesignPhase =
   | "REVISION_REVIEW";
 
 export type SystemDesignCheckpointStatus =
-  | "AWAITING_CHOICE"
-  | "EDITING"
-  | "SUBMITTED"
-  | "RESOLVED";
+  "AWAITING_CHOICE" | "EDITING" | "SUBMITTED" | "RESOLVED";
 
 export interface DesignView {
   interviewId: string;

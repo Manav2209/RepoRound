@@ -123,8 +123,12 @@ export function createResultsRouter(): Hono {
   });
 
   app.delete("/:interviewId/report", async (c) => {
-    const deleted = await prisma.report.deleteMany({
+    const deleted = await prisma.$transaction(async tx => {
+      const result = await tx.report.deleteMany({
       where: { interviewId: c.req.param("interviewId"), userId: c.get("userId") },
+      });
+      if (result.count) await tx.interviewMetrics.deleteMany({ where: { interviewId: c.req.param("interviewId"), userId: c.get("userId") } });
+      return result;
     });
     return deleted.count ? c.body(null, 204) : c.json({ error: "Report not found" }, 404);
   });
