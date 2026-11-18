@@ -1,262 +1,158 @@
 # RepoRound
 
-**Real code. Real architecture decisions. A technical interview that asks better follow-up questions.**
+**Practice explaining the engineering decisions behind your projects.**
 
 [![CI](https://github.com/Manav2209/RepoRound/actions/workflows/ci.yml/badge.svg)](https://github.com/Manav2209/RepoRound/actions/workflows/ci.yml)
-![Bun](https://img.shields.io/badge/runtime-Bun-111111)
-![Next.js](https://img.shields.io/badge/frontend-Next.js-111111)
+![TypeScript](https://img.shields.io/badge/TypeScript-monorepo-3178C6)
+![Bun](https://img.shields.io/badge/Bun-1.4.2-111111)
 ![Status](https://img.shields.io/badge/status-pre--production-orange)
 
-RepoRound is a voice-first technical interview practice platform. Instead of relying only on generic questions, it interviews developers about **their own GitHub projects** or a **system design they build on a canvas**. A backend orchestrator manages the interview, persists answers, asks adaptive follow-up questions, and produces evidence-backed feedback from the actual conversation.
+RepoRound is a voice interview practice platform with two modes: discuss decisions in a real GitHub repository, or design a system on a canvas and defend its architecture. Questions adapt to the conversation, and a background worker produces feedback from the candidate's recorded answers.
 
-> **Current stage:** Pre-production. Automated checks, Docker images, and an EC2 deployment path exist, but successful builds are not proof of production reliability or security. See [Checks](#checks), [Access and security](#access-and-security), and [EC2 deployment](docs/ec2-deployment.md) before public launch.
+[Recorded results](#recorded-results) · [Architecture](#architecture) · [Local setup](#local-setup) · [Checks](#checks) · [Documentation](#documentation)
 
-## Features
+## Interview modes
 
-| | Capability | What it does |
-| --- | --- | --- |
-| 🧑‍💻 | **GitHub project interviews** | Analyze a public repository at a pinned commit, ask code-specific questions, and validate factual claims against indexed evidence. |
-| 🏗️ | **System design interviews** | Choose a design challenge, draw a component/flow graph, discuss bottlenecks, and optionally revise the architecture after each answer and the final failure scenario. |
-| 🎙️ | **Real-time voice** | Use LiveKit, Silero VAD, and Deepgram for spoken interviews with interruptions; durable interview modes also support reconnection. |
-| 🧠 | **Adaptive interview engine** | Select phases, objectives, difficulty, and follow-ups through application-defined policies with model-assisted question generation. |
-| 📊 | **Evidence-backed results** | Evaluate recorded answers asynchronously, with category scores, confidence, candidate quotations, and an insufficient-evidence state. |
-| 🔄 | **Durable workflows** | Persist interview state and evaluation intent in PostgreSQL; dispatch asynchronous evaluations through Redis/BullMQ. |
+| Mode              | Duration                      | What the interview explores                                                                                                                                    |
+| ----------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Repository**    | 15 minutes                    | Requirements, chosen approaches, plausible alternatives and consequences, grounded in source at a pinned commit. Up to four main questions and two follow-ups. |
+| **System Design** | 30 minutes, including drawing | One of ten scoped problems, a submitted architecture, and three substantive questions: the core flow, a technical decision and a failure scenario.             |
 
-## Architecture at a glance
+Repository preparation samples implementation across services, follows a bounded set of local imports, and prepares questions with source excerpts and assessment criteria. The interviewer briefly summarizes the project, then discusses its decisions without assuming personal ownership of every choice.
 
-```text
-Next.js candidate UI ───── HTTP ─────> Hono API ─────> PostgreSQL + Prisma
-         │                              │                    │
-         │                              ├── GitHub analysis   └── Interview state
-         │                              ├── Model API             and evaluation intent
-         │                              ├── FalkorDB (design topology)
-         │                              └── Redis / BullMQ ───> Evaluation worker
-         │
-         └──── LiveKit room <──────────────> Voice worker
-                                             ├── Silero VAD
-                                             ├── Deepgram STT / TTS
-                                             └── Backend question orchestration
+System Design snapshots are immutable revisions stored in PostgreSQL and projected into FalkorDB. Candidates can revise their diagram at silent UI checkpoints. Asking to repeat a question replays it without scoring another answer or consuming a question slot.
+
+Results include category feedback, strengths, weaknesses, supporting evidence and coverage. Short or incomplete interviews can produce an **insufficient evidence** result rather than an invented score.
+
+## Recorded results
+
+These development measurements were recorded on **18 November 2026**. Raw samples and methodology are checked into [`spec/benchmarks`](spec/benchmarks).
+
+| Repository backend measurement                       | Before  | After      | Evidence                                            |
+| ---------------------------------------------------- | ------- | ---------- | --------------------------------------------------- |
+| Median turn processing, live model                   | 8.92 s  | **2.87 s** | Six scripted turns per version                      |
+| p95 turn processing, live model                      | 12.12 s | **4.39 s** | Same small development comparison                   |
+| Model requests per normal answer                     | 2       | **1**      | Separate assessment/generation → combined request   |
+| SQL statements per active turn, immediate-model stub | 26–27   | **0**      | Six turns per version; isolates database/state work |
+
+The [before](spec/benchmarks/repository-live-before.json) and [after](spec/benchmarks/repository-live-after.json) runs measure backend processing; they exclude STT, TTS, browser playback, HTTP round trips and the intentional startup wait. The baseline recorded two assessment-schema failures; the after run recorded none. These measurements predate the latest decision-question prompts and need to be rerun for that version.
+
+Other recorded checks:
+
+- **System Design:** ten scripted rounds and 30 answers; backend median **1.98 s**, p95 **2.68 s**. All ten rounds produced reports and passed repeat, checkpoint and raw-cleanup checks. [Run data](spec/benchmarks/system-design-controlled.json)
+- **Live voice smoke:** one synthetic spoken answer through LiveKit, real STT, the configured model and TTS; **6.08 s** from candidate audio-source playout end to first received non-silent reply audio. Report generation and cleanup passed. This is one sample, not a voice p95 or browser-audible measurement. [Run data](spec/benchmarks/repository-voice-smoke.json)
+- **Latest recorded local checks:** 183 passing tests, with 43 integration cases skipped in that default run; a separate targeted PostgreSQL run passed 23 tests. Backend lint and type checks passed.
+
+A reliable end-to-end voice p95 and human-rated question/evaluation quality remain unmeasured. [Measurement details, commands and limits](docs/measurements.md)
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Web["Next.js candidate UI"] -->|"same-origin API"| API["Hono backend"]
+    Web <-->|"audio"| Room["LiveKit room"]
+    Room <-->|"audio"| Voice["Voice worker · Silero VAD"]
+    Voice --> Speech["Deepgram STT / TTS"]
+    Voice -->|"turns and events"| API
+    API --> Memory["Active repository state · process memory"]
+    API --> PG["PostgreSQL · Prisma"]
+    API --> Graph["FalkorDB · design topology"]
+    API -->|"evaluation relay"| Queue["Redis · BullMQ"]
+    Queue --> Eval["Evaluation worker"]
+    Eval --> PG
+    API --> Model["OpenAI-compatible model API"]
+    Eval --> Model
 ```
 
-**Stack:** Bun · TypeScript · Next.js / React · Hono · PostgreSQL / Prisma · Redis / BullMQ · LiveKit · Deepgram · Silero · FalkorDB · Docker · GitHub Actions.
+**The backend owns interview progression.** Models assess answers and propose questions; application policy controls objectives, deadlines, repeats and state changes. The voice worker speaks approved question text.
 
-## Quick start
+1. **Prepare:** retrieve a repository at a pinned commit or accept an architecture snapshot. Prepare the relevant evidence and question intents.
+2. **Discuss:** stream speech through LiveKit. A repository answer uses one combined model request, local policy checks and prepared fallbacks. System Design uses one assessment request and its question bank.
+3. **Evaluate:** save the available repository transcript and final state before evaluation. Durable PostgreSQL intents are relayed to BullMQ; a separate worker writes the report.
+4. **Retain useful evidence:** keep account-owned reports and numeric operational summaries after raw-interview cleanup.
 
-Requirements: Bun 1.4.2, Node.js 24+, PostgreSQL, Redis for BullMQ, and credentials for LiveKit, Deepgram, and an OpenAI-compatible model endpoint. System Design mode also needs FalkorDB.
+Default repository sessions keep active context, transcript and state in one backend process. A disconnect or lost process memory requires a new interview; a crash can lose unflushed turns. System Design retains durable state and its reconnect policy. Memory mode requires one backend owner per active session. [Storage, recovery and graph details](docs/architecture.md)
+
+### Repository layout
+
+| Path                                               | Responsibility                                                                                |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [`apps/web`](apps/web)                             | Next.js / React practice flow, voice room, diagram canvas and results                         |
+| [`apps/backend`](apps/backend)                     | Hono API, Better Auth, repository analysis, interview policy, graph integration and job relay |
+| [`apps/voice-agent`](apps/voice-agent)             | LiveKit worker, Silero turn detection, streaming STT/TTS, cancellation and voice telemetry    |
+| [`apps/evaluation-worker`](apps/evaluation-worker) | BullMQ consumer for asynchronous evaluation                                                   |
+| [`packages/db`](packages/db)                       | Prisma schema, migrations and shared database client                                          |
+| [`packages/providers`](packages/providers)         | Voice and model provider configuration                                                        |
+| [`packages/types`](packages/types)                 | Shared voice/backend contracts                                                                |
+| [`spec`](spec)                                     | Design decisions, research, benchmark artifacts and implementation specs                      |
+
+## Local setup
+
+### 1. Prerequisites
+
+- **Bun 1.4.2** and **Node.js 24+**.
+- **Docker** for local PostgreSQL, Redis and FalkorDB, or equivalent reachable services.
+- A **LiveKit** project or reachable self-hosted server, a **Deepgram** key, and an **OpenAI-compatible model endpoint** with credentials.
+
+The app makes real provider requests during repository preparation and voice interviews. Provider credentials are required to exercise those flows.
+
+### 2. Install and create environment files
 
 ```bash
 git clone https://github.com/Manav2209/RepoRound.git
 cd RepoRound
-bun install
+bun install --frozen-lockfile
+
 cp apps/backend/.env.example apps/backend/.env
 cp apps/voice-agent/.env.example apps/voice-agent/.env
 cp apps/evaluation-worker/.env.example apps/evaluation-worker/.env
+cp apps/web/.env.example apps/web/.env
 cp packages/db/.env.example packages/db/.env
 ```
 
-Fill in the environment files using [Setup](#setup), then generate the Prisma client, apply migrations to your intended database, and start the development services:
+In PowerShell, use `Copy-Item` in place of `cp` if your shell does not provide that alias. Fill in the copied files before starting the services.
+
+### 3. Start local dependencies
+
+For a fresh local setup, these containers match the ports and database credentials in the environment examples. Reuse existing services instead if those ports are already occupied.
 
 ```bash
-bun run db:generate
-bun run db:migrate:deploy
-bun run dev
+docker run -d --name reporound-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_USER=ai_interview -e POSTGRES_PASSWORD=ai_interview -e POSTGRES_DB=ai_interview -v reporound-postgres:/var/lib/postgresql/data postgres:17-alpine
+docker run -d --name reporound-redis -p 127.0.0.1:6380:6379 -v reporound-redis:/data redis:7-alpine redis-server --appendonly yes --maxmemory-policy noeviction
+docker run -d --name reporound-falkor -p 127.0.0.1:6379:6379 falkordb/falkordb:latest
 ```
 
-The web app opens at [http://localhost:3000](http://localhost:3000), and the API listens on port 8080. See [Setup](#setup) for authentication and provider settings.
+Redis on **6380** carries BullMQ jobs. FalkorDB on **6379** stores graph projections; keep their endpoints distinct. These example credentials are for local development. For managed PostgreSQL, use the provider's required TLS configuration.
 
-## Architecture
+### 4. Configure shared settings
 
-- `apps/backend`: Hono API, GitHub analysis, interview objectives and policies, PostgreSQL state, repository tools, durable jobs, the System Design graph store, and evidence-backed evaluation. It also hosts the BullMQ dispatch relay that publishes post-interview evaluation work.
-- `apps/voice-agent`: LiveKit voice worker, Silero VAD, Deepgram STT/TTS, playback interruptions, final answers, and spoken transcript events.
-- `apps/evaluation-worker`: standalone BullMQ consumer that runs evidence-backed evaluation off the request path, so a Redis outage or slow model call cannot block interview finalization.
-- `apps/web`: Next.js candidate flow, live transcripts, reconnect, the System Design canvas, and interview results.
-- `packages/providers`: provider configuration and construction.
-- `packages/db`: Prisma schema, migration history, generated client, and shared database connection, exposed through `@repo/db`.
+| Setting                                                      | Configure in                                                                                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                               | Backend, evaluation worker and `packages/db`; all must point to the same database. Prefer a direct endpoint for migrations; runtime clients may use a pooler. |
+| `AI_ROUTER_BASE_URL`, `AI_ROUTER_API_KEY`, `AI_ROUTER_MODEL` | Backend, voice worker and evaluation worker                                                                                                                   |
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`       | Backend and voice worker; use the same LiveKit project                                                                                                        |
+| `DEEPGRAM_API_KEY`                                           | Voice worker                                                                                                                                                  |
+| `INTERNAL_API_TOKEN`                                         | Backend and voice worker; use the same secret                                                                                                                 |
+| `BULLMQ_REDIS_URL`                                           | Backend and evaluation worker; local default `redis://localhost:6380`                                                                                         |
+| `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_GRAPH`           | Backend; local defaults `localhost`, `6379`, `ai_interviewer`                                                                                                 |
+| `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`                      | Backend; local origin `http://localhost:3000`, secret of at least 32 random characters                                                                        |
+| `BACKEND_URL`                                                | Web app; local default `http://localhost:8080`                                                                                                                |
 
-The backend owns interview progression. Models extract information and generate questions; application code controls phases, objectives, difficulty, deadlines, and state changes. The voice worker speaks backend questions and cancels playback locally when candidate speech interrupts it.
+Keep `CORS_ALLOWED_ORIGINS` aligned with the frontend origin. `BETTER_AUTH_URL` is the public frontend URL, including when the backend runs on a different port. The examples describe optional OAuth, email, trace export and cost-estimation settings.
 
-Two interview modes are supported. **GitHub** mode is repository-aware: the candidate discusses a repository and claims are checked against indexed source. **System Design** mode provides a 30-minute round, including drawing, with three substantive question slots: the core flow, one problem-specific technical decision, and the prepared failure scenario last. The candidate submits an immutable architecture snapshot that is persisted in PostgreSQL and projected into FalkorDB. Optional diagram revisions are offered as silent UI checkpoints after answers; those choices and repeat requests do not consume substantive question slots. Ending early or running out of time produces incomplete coverage rather than invented answers.
-
-The version 3 system design catalog narrows the ten problems to the requirements those three questions can meaningfully assess, and includes explicit `outOfScope` items. A defensible alternative mechanism is acceptable; omitted optional features are not hidden grading requirements. Existing interviews retain their saved problem snapshot and deadline. The research and implementation decisions are documented in [spec/system-design-question-bank-research.md](spec/system-design-question-bank-research.md).
-
-The implementation specification is in [spec/improvement-spec.md](spec/improvement-spec.md). Its October 1 delivery decisions supersede the original first-release scope.
-
-New repository interviews start with a brief project summary and a question about the requirement or constraint behind a concrete implementation choice. Preparation selects up to four distinct decision questions, each with pinned implementation excerpts, question-specific assessment criteria and optional follow-ups. The 15-minute round allows at most two follow-ups overall and has no separate mandatory scaling block. Questions explore reasons, plausible alternatives and consequences without assuming authorship or deliberate selection of every dependency. Existing saved plans retain their earlier structure.
-
-Repository retrieval defaults to `REPOSITORY_CONTEXT_MODE=diverse`: manifests and documentation have bounded initial slots, runtime sources are sampled across services, and a small reserved budget follows local imports into handlers and workflows. Analysis and planning use bounded implementation windows instead of file prefixes. References establish source locations, not semantic correctness; generated question quality still needs human review. `current` preserves the earlier sampling baseline. See [the decision interview spec](spec/repository-decision-interview-spec.md).
-
-In either mode, requests such as “repeat the question” replay the current substantive question without counting as an answer, adding scoring evidence, or advancing the interview. In System Design mode, a repeat request at a diagram checkpoint replays the preceding interview question; the candidate can answer it before returning to the checkpoint.
-
-## Response latency
-
-By default, a repository interview's final candidate turn follows:
-
-```text
-STT → record answer in active memory → combined assessment/question proposal → local policy checks → TTS
-```
-
-The combined repository request has a 6.5-second limit and one attempt. Invalid proposals use a source-grounded local fallback without another model call; failed assessment keeps the answer for later recovery. Active context and state stay in backend memory until completion, when the transcript, state and evaluation intent are saved. System Design retains one assessment request and its deterministic question bank. Legacy separate repository requests retain their four-second limits. These limits bound model requests; they are not a guarantee of total end-to-end latency. Measurements and remaining targets are in [spec/interview-latency-improvement-spec.md](spec/interview-latency-improvement-spec.md).
-
-Detailed repository claim checks, failed analysis recovery, and scoring run after the interview:
-
-```text
-END job → recover pending analysis → VERIFY jobs → EVALUATE intent → Redis/BullMQ → evaluation-worker → result
-```
-
-The `EVALUATE` intent is a durable PostgreSQL row, not the work itself. A dispatch relay in the backend publishes it to the `evaluate` BullMQ queue with a stable job id (`eval-<interviewId>-v1`) and marks it dispatched; the PostgreSQL job poller excludes `EVALUATE` so a single owner consumes each intent. The `apps/evaluation-worker` process performs the model calls and writes the evaluation. Because the intent is durable, a Redis outage or a crashed worker leaves it recoverable: the relay re-queues stale dispatched intents during reconciliation, and the result page keeps polling. Exhausting the bounded retries marks the interview `evaluation_failed`, which the result page surfaces with a retry action.
-
-Claim verification checks whether fetched code supports or contradicts a factual statement. Missing code in a partial index is not a contradiction. Repository implementation alone never demonstrates candidate competence.
-
-## State and recovery
-
-- Objective plans replace static question banks. Each question records its objective, phase, difficulty, reason, and code references when available.
-- Default repository sessions record final answers in memory before reasoning and persist them at completion. System Design and legacy sessions persist answers before reasoning. Stable turn IDs deduplicate retries; memory sessions use per-turn ownership and cancellation, while durable sessions use runtime leases and version checks across backend processes.
-- A GitHub interview clock starts when the voice session is allocated. A System Design clock starts when the interview is created, and reconnect or transient startup gaps before the voice session are credited back. System Design retains durable runtime recovery; default GitHub sessions keep active state in a single backend process and require a fresh interview after disconnection or lost backend memory.
-- Session allocation is serialized in PostgreSQL. The session row exists before LiveKit dispatch.
-- System Design and legacy database-backed GitHub sessions retain the configured reconnect window. Default memory-backed GitHub sessions show a new-interview action after disconnection. Their available transcript is flushed before background evaluation; a backend process crash can lose unflushed turns, an accepted tradeoff for this mode.
-- The browser End action immediately stops further progression. Finalization and evaluation use unique durable job keys, expiring leases, and bounded retries.
-- Failed evaluations can be retried from the result page while their raw source material is retained. A completed report is final.
-- PostgreSQL jobs allow four total executions, including the initial attempt; lock contention and intentional deferrals do not spend that budget. BullMQ evaluation retries have their own policy.
-- Voice events are journaled until the backend acknowledges them. For durable recovery across container replacement, mount `VOICE_OUTBOX_DIR` on persistent storage. Its default OS temporary directory covers process restarts on the same host.
-
-## Repository knowledge and limits
-
-Only HTTPS GitHub repository URLs are accepted. Fetches are pinned to a commit SHA. The index contains up to 1,500 paths and 24 selected text files, at most 10,000 characters per file and 120,000 characters overall. Repositories over 100 MB are rejected. This is a partial index, not a full code audit.
-
-Read tools expose project context, architecture, bounded file excerpts, lexical symbol lookup, code search, dependency lookup, candidate state, and the current objective. Code references include path, commit SHA, and line range. Symbol lookup uses lexical declarations rather than a language-specific AST. Dependency lookup currently supports `package.json`; other manifests contribute to repository analysis and can be inspected with file/search tools.
-
-GitHub mode also derives an **evidence-only repository graph** from `RepositoryKnowledge`, pinned to the analyzed commit SHA. Edges are limited to facts provable from the index: `IMPORTS` between indexed files (a relative specifier resolved within the index, with its line), `IMPORTS_MODULE` for bare imports a file literally declares, and `DEPENDS` for manifest dependency keys with their version. A relative import whose target is not indexed produces no edge, and a truncated manifest produces no dependency edges. Objective questions may cite graph-grounded facts (for example, a module and its indexed importers); when the index cannot support a fact, no relationship is asserted.
-
-Repository analysis and indexed source excerpts are stored together in `RepositoryKnowledge`. The consolidation migration copies legacy `GithubContext` analysis into that record before dropping the duplicate table. Existing source indexes and richer analysis are preserved. The unused `Interview.systemPrompt` and `InterviewPlan.questions` columns are removed; actual question history remains in interview runtime state.
-
-Repository text and candidate answers are untrusted data. All structured model outputs are validated with Zod. Model-proposed tools cannot directly mutate interview state. Limits include 40 questions, five tool calls per registry operation, 200 tool calls per interview, 60,000 input characters per model request, and bounded output tokens.
-
-## System Design graph (FalkorDB)
-
-System Design mode uses FalkorDB as its topology layer. PostgreSQL remains the source of truth for the interview and the submitted snapshot; the graph is a rebuildable projection used to choose questions. Each accepted canvas snapshot is installed under an immutable `submissionId`, so no two revisions share nodes or edges. The GitHub repository graph described above is a separate, in-memory evidence-only structure and is not stored in FalkorDB.
-
-Interview-scoped candidate facts are also projected to `InterviewFact` nodes in FalkorDB, separately from `DesignComponent` topology. Short summaries and source turn IDs are derived from the canonical PostgreSQL runtime after durable commits, including the completion flush for memory sessions. The question path selects facts from its active runtime; graph fact retrieval is disabled until local measurements show a clear benefit. A graph outage leaves the projection pending and does not block questions or evaluation. A missing or corrupt runtime snapshot cannot currently be replayed from a full event log.
-
-### Data model
-
-| Element              | Properties                                                                | Meaning                                             |
-| -------------------- | ------------------------------------------------------------------------- | --------------------------------------------------- |
-| `(:DesignComponent)` | `interviewId`, `submissionId`, `revision`, `componentId`, `kind`, `label` | One node per component on the canvas                |
-| `[:FLOWS_TO]`        | `submissionId`, `edgeId`                                                  | Directed request or data flow from source to target |
-
-`kind` is one of `client`, `load_balancer`, `api_service`, `database`, `cache`, `message_queue`, `worker`, `object_storage`, `external_service`, or `cdn`. Every node and edge carries the `submissionId`, which is the isolation boundary for all reads and writes.
-
-```text
-(client)-[:FLOWS_TO]->(load_balancer)-[:FLOWS_TO]->(api_service)
-(api_service)-[:FLOWS_TO]->(database)
-(api_service)-[:FLOWS_TO]->(message_queue)-[:FLOWS_TO]->(worker)
-(worker)-[:FLOWS_TO]->(external_service)
-```
-
-### Lifecycle
-
-1. A submitted snapshot is stored in `SystemDesignSubmission` with `graphStatus = BUILDING`.
-2. The backend installs the snapshot: any existing nodes for that `submissionId` are detached and deleted, then nodes and edges are created.
-3. Verification counts nodes and edges and asserts there are no cross-submission edges. A mismatch marks the submission `FAILED` and returns `503`; replaying the same `requestId` rebuilds a failed submission.
-4. Only `READY` submissions are read by the interviewer. Revision 1 starts the discussion. After each substantive answer the candidate can submit one revision for that checkpoint and then continue; every revision is independently installed and diffed for evaluation.
-5. The timer starts when the interview row is created. Voice-session startup and reconnect gaps are credited back, and the interview reserves time for the failure scenario and final edit.
-
-### Cypher queries the product depends on
-
-```cypher
-// Install components
-UNWIND $nodes AS row
-CREATE (n:DesignComponent {
-  interviewId: $interviewId,
-  submissionId: $submissionId,
-  revision: $revision,
-  componentId: row.componentId,
-  kind: row.kind,
-  label: row.label
-})
-
-// Install directed flows
-UNWIND $edges AS row
-MATCH (s:DesignComponent {submissionId: $submissionId, componentId: row.source})
-MATCH (t:DesignComponent {submissionId: $submissionId, componentId: row.target})
-CREATE (s)-[:FLOWS_TO {submissionId: $submissionId, edgeId: row.edgeId}]->(t)
-
-// Verify node count, edge count, and scope isolation
-MATCH (n:DesignComponent {submissionId: $submissionId}) RETURN count(n) AS value
-MATCH (:DesignComponent {submissionId: $submissionId})-[r:FLOWS_TO {submissionId: $submissionId}]->(:DesignComponent {submissionId: $submissionId}) RETURN count(r) AS value
-MATCH (a:DesignComponent)-[r:FLOWS_TO {submissionId: $submissionId}]->(b:DesignComponent)
-WHERE a.submissionId <> $submissionId OR b.submissionId <> $submissionId
-RETURN count(r) AS value
-
-// Components and edges for probe selection
-MATCH (c:DesignComponent {submissionId: $submissionId})
-RETURN c.componentId AS componentId, c.kind AS kind, c.label AS label
-ORDER BY c.componentId
-
-MATCH (s:DesignComponent {submissionId: $submissionId})
-  -[r:FLOWS_TO {submissionId: $submissionId}]->
-  (t:DesignComponent {submissionId: $submissionId})
-RETURN r.edgeId AS edgeId, s.componentId AS sourceId, s.kind AS sourceKind,
-       t.componentId AS targetId, t.kind AS targetKind
-
-// Multi-hop traversal: every component that can reach an external provider
-MATCH p = (source:DesignComponent {submissionId: $submissionId})
-  -[:FLOWS_TO*1..5]->
-  (provider:DesignComponent {submissionId: $submissionId, componentId: $providerId})
-RETURN DISTINCT source.componentId AS upstreamId, source.label AS upstreamLabel
-LIMIT 30
-
-// Queue to worker pairs
-MATCH (q:DesignComponent {submissionId: $submissionId, kind: $queueKind})
-  -[:FLOWS_TO]->(w:DesignComponent {submissionId: $submissionId, kind: $workerKind})
-RETURN q.componentId AS queueId, w.componentId AS workerId
-
-// Orphan components (no incoming or outgoing flow)
-MATCH (c:DesignComponent {submissionId: $submissionId})
-WHERE NOT (c)-[:FLOWS_TO]-() AND NOT (c)<-[:FLOWS_TO]-()
-RETURN c.componentId AS componentId, c.kind AS kind
-```
-
-The hop bound in the traversal is clamped to `1..5` and interpolated into the query, because the Cypher grammar does not accept a parameter for the upper bound of a variable-length path.
-
-### Algorithms
-
-- **Ordered path search** (`findOrderedPath`): bounded, cycle-safe DFS over the graph facts. It finds a directed path whose visited nodes match a requested kind sequence while allowing unrelated intermediate nodes. The interviewer uses `api_service → message_queue → worker`, `api_service → database`, and `worker → external_service`.
-- **Deterministic probe selection** (`selectProbe`): application policy, not an LLM tool loop. It selects from the active problem's technical probes using the submitted topology and avoids probe IDs already asked. New rounds have three substantive slots: an opening flow question, one relevant technical decision, and the scripted failure challenge last. Missing or alternate components call for a question about the required guarantee, not an invented topology fact or a prescribed product.
-- **Checkpoint flow**: each substantive answer records an assessment and opens a silent UI checkpoint. The canvas offers an optional edit or continuation; the voice worker does not recite that menu as another interview question. A checkpoint resolves only when the active revision is `READY`; an unchanged snapshot is a no-op. A targeted clarification, when necessary, stays within the same substantive slot.
-- **Explainability**: every probe records `probeId`, `submissionId`, `revision`, `referencedComponentIds`, `graphPath`, and a human-readable `reason`; the selected probe is also written to `system_design.probe` interview events. Question wording is generated from those facts, and accepted revisions are compared with a deterministic node/edge diff, so evaluation can trace how the architecture changed.
-
-Configuration: `FALKORDB_HOST` (default `localhost`), `FALKORDB_PORT` (default `6379`), `FALKORDB_GRAPH` (default `ai_interviewer`), and `SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES` (default `30`, validated from `10` to `30`). The product uses a flat 30-minute system design round with three core questions, not a duration selector. Repository rounds retain their separate 15-minute default. Read queries use a 400 ms timeout and writes a 5 s timeout; a failed connection is reset and re-established on the next call.
-
-## Evaluation
-
-The evaluation includes technical depth, architecture, debugging, implementation, tradeoff reasoning, and communication. Final grading reads the recorded candidate answers directly, including adjacent speech fragments, instead of trusting speculative live summaries. Every assessed category includes a numeric score, confidence, and quotes checked against the originating candidate turns. Confidence expresses certainty of the assessment, not candidate ability: a clearly weak answer can receive a low score with high confidence. Unsupported categories and scores remain `INSUFFICIENT_EVIDENCE` / `null`; pipeline failures and unexplored objectives are not candidate weaknesses. Overall and dimension scores are calculated from assessed categories, excluding unassessed areas.
-
-The responsive result view includes a skill breakdown, short supporting answer quotes, and session details. A completed evaluation creates an independent account-owned report. Once its durable evaluation intent settles, the backend removes the raw transcript, runtime, repository knowledge, design snapshots, and interview-scoped FalkorDB data through a retryable cleanup intent. Numeric operational metrics are retained separately without candidate text. Reports can be viewed and deleted from the account page; deleting a report also deletes its retained metrics, and account deletion cascades through all of that account's metrics.
-
-Evaluation reads every transcript page. Candidate answers share the model input budget, retaining both the beginning and end of long answers. The completion event records included, omitted and shortened candidate-turn counts. Partial coverage is shown in the result view and feedback, with confidence capped at 0.65; omitted content is not evidence of a weakness. Older assessments without coverage metadata remain readable.
-
-## Access and security
-
-RepoRound requires an email/password account with a verified email. Better Auth runs at `/api/auth/*`, stores sessions in PostgreSQL, and issues HttpOnly `SameSite=Lax` cookies scoped to the app origin. Passwords are hashed with Argon2id. Session tokens are stored as an HMAC-SHA256 digest, so a database read cannot be replayed as a browser session. Cookies are `Secure` when `BETTER_AUTH_URL` uses HTTPS.
-
-Interviews belong to the authenticated account; every public interview operation checks ownership on the server. The API never accepts a user ID from the browser. Sign-up, sign-in, resend-verification, and password-reset requests are rate limited per client IP. Password changes and resets revoke existing sessions. Google and GitHub sign-in are enabled only when both provider credentials are configured; implicit email-based account linking is disabled.
-
-Accounts can be deleted from `/account`. Deletion removes remaining interview fact and design graph data first, then cascades through reports, interviews, sessions, and linked provider accounts. If graph cleanup fails, account deletion stops for a retry. The authentication migration intentionally deletes pre-auth anonymous browser sessions and interviews instead of guessing an owner.
-
-The voice worker uses a separate internal bearer token and must supply a session belonging to the interview. The browser never receives server credentials or the internal token. Database-backed rate limits also cover interview creation, public operations, internal events, and candidate turns.
-
-EC2 deployment generates a separate proxy credential for Caddy and the backend. Caddy overwrites the client-IP and proxy-credential headers; the backend accepts that client identity only when the credential matches. Other forwarding headers are ignored. This configuration assumes browsers connect directly to Caddy; adding a CDN requires configuring its trusted client identity at the proxy boundary. Unexpected API failures return a generic error and a server-generated request ID.
-
-## Setup
-
-Requirements: Bun 1.4.2, Node.js 24+, a PostgreSQL instance (local or managed), a Redis instance for BullMQ, LiveKit, Deepgram, and an OpenAI-compatible model endpoint. System Design mode additionally needs a reachable FalkorDB instance.
+Generate separate random values for `BETTER_AUTH_SECRET` and `INTERNAL_API_TOKEN` with:
 
 ```bash
-bun install
+bun -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Copy each app's `.env.example` to `.env` and fill in credentials. Copy `packages/db/.env.example` to `packages/db/.env` and set its `DATABASE_URL` to your database's direct PostgreSQL connection URL. Set the backend's `DATABASE_URL` to the same database; the application may use a pooled connection URL. The backend and voice worker must share `INTERNAL_API_TOKEN`. From the repository root, generate the Prisma client and run migrations yourself against that database:
+For local console-only email, comment out or remove `RESEND_API_KEY` and `AUTH_EMAIL_REPLY_TO` when unused. Optional settings must be omitted when unset; an empty value can fail configuration validation. Production email requires Resend and a configured sender.
+
+Default repository settings are `GITHUB_ACTIVE_STORAGE=memory`, `GITHUB_TURN_MODE=combined` and `REPOSITORY_CONTEXT_MODE=diverse`. See [the development guide](docs/development.md#setup) for recovery behavior and comparison modes.
+
+### 5. Generate the client and apply migrations
+
+From the repository root:
 
 ```bash
 bun run db:generate
@@ -264,129 +160,50 @@ bun run db:migrate:deploy
 bun run db:migrate:status
 ```
 
-Authentication requires `BETTER_AUTH_URL` set to the public frontend origin (for example `http://localhost:3000`) and `BETTER_AUTH_SECRET` with at least 32 random characters. Locally, unset Resend credentials print verification and reset links to the backend console. Production requires `RESEND_API_KEY` and `AUTH_EMAIL_FROM`; set `AUTH_COOKIE_SECURE=false` only for local HTTP development. Optional `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` enable those providers; configure their callback URLs as `BETTER_AUTH_URL/api/auth/callback/google` and `.../github`. If you add more public origins, include them in `AUTH_TRUSTED_ORIGINS` and `CORS_ALLOWED_ORIGINS`.
+The Prisma CLI uses `packages/db/.env`. These commands apply the checked-in schema to the database you configured. Application containers do not run migrations automatically. For an existing pre-auth deployment, read the [migration note](docs/development.md#setup) before upgrading.
 
-The web app calls the API through same-origin relative URLs. Next.js forwards `/api/*` to `BACKEND_URL` during local development (default `http://localhost:8080`); production Caddy routes `/api/*` directly to the backend.
-
-Database commands are root aliases for scripts in `packages/db`; Prisma dependencies and files live in that package. Prisma loads `packages/db/.env` for these commands. Alternatively, export `DATABASE_URL` in your shell. Development migrations use `db:migrate`; deployments use `db:migrate:deploy`.
-
-When applying the authentication migration to an existing deployment, stop the backend and voice workers first, take a database backup, apply the migration manually, and start images built from the updated code. The migration deletes anonymous browser sessions and their interviews; it does not assign them to an account. The previous backend requires the removed tables and cannot run against the new schema.
-
-The backend defaults to 15 minutes for GitHub repository interviews and 30 minutes for system design, including initial drawing. System Design and legacy database-backed GitHub sessions use a 300-second reconnect window. The system design duration change applies to new rounds; session allocation does not reset an existing runtime's saved deadline. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero VAD controls answer boundaries and detects interruptions.
-
-Repository interviews default to `GITHUB_ACTIVE_STORAGE=memory` and `GITHUB_TURN_MODE=combined`. Repository context loads once, active conversation/state/telemetry stay in a bounded process-local store, and a normal answer uses one model request for assessment and a proposed question. Application policy still chooses the allowed next objective and uses a grounded fallback when the proposal does not pass checks. The opening uses a prepared source-backed fallback rather than another startup model request. Completion persists transcript, final state, metrics events and the durable END intent before background evaluation. Closing-speech events drain before raw cleanup. `GITHUB_ACTIVE_STORAGE=postgres` and `GITHUB_TURN_MODE=separate` retain the earlier implementation for comparison. System Design keeps its existing durable architecture/checkpoint flow and deterministic bank.
-
-Memory mode requires one backend owner for an active interview. It is bounded to 32 sessions and a serialized-content budget of 128 MiB overall / 16 MiB per session; these are accounting limits, not exact JavaScript heap measurements. Account/report cleanup evicts its active data. Disconnected sessions are finalized after a 30-second grace; abandoned rounds are distinguished in retained metrics. Do not deploy this mode across independent backend replicas without session ownership or a shared store. Transcript retention after completed-report cleanup remains unchanged.
-
-Start the backend, web app, voice worker, and evaluation worker from the repository root:
+### 6. Run and test an interview
 
 ```bash
-bun run dev
+bun run dev --ui=stream
 ```
 
-When running services individually instead, start the voice worker with:
+This starts the **web app, backend, voice worker and evaluation worker**. The terminal streams logs with service prefixes.
 
-```bash
-bun run agent:start
-```
+1. Open [localhost:3000](http://localhost:3000). Backend health is available at [localhost:8080/health](http://localhost:8080/health).
+2. Create an account and verify its email. Without local Resend credentials, verification links appear in the **backend terminal**.
+3. Choose a public GitHub repository or a System Design problem. Let preparation finish, then allow microphone access and start.
+4. End the interview and wait for the evaluation worker to produce the report.
 
-The worker dispatch name is `ai-interviewer`. Silero is preloaded once per worker process and reused for its session.
-
-Start the evaluation worker with:
-
-```bash
-bun run evaluation-worker:start
-```
-
-The backend and evaluation worker must share the same `BULLMQ_REDIS_URL` (default `redis://localhost:6380`) and `DATABASE_URL`. `EVALUATION_WORKER_CONCURRENCY` bounds concurrent evaluations per worker. The backend also needs `BULLMQ_REDIS_URL` to publish evaluation intents. For System Design mode, set `FALKORDB_HOST`, `FALKORDB_PORT`, and `FALKORDB_GRAPH` in the backend.
-
-## Docker
-
-Run Docker commands from the repository root (`my-turborepo`), since all apps depend on workspace packages. Each app has its own multi-stage Dockerfile. Containers run as an unprivileged user, and `.dockerignore` excludes local dependencies, build outputs, and environment files.
-
-Fill in `apps/backend/.env`, `apps/voice-agent/.env`, and `apps/evaluation-worker/.env` using their examples. Set `DATABASE_URL` in `apps/backend/.env` and `apps/evaluation-worker/.env` to your managed PostgreSQL connection URL, with the TLS settings required by your provider, and set `BULLMQ_REDIS_URL` in the backend and evaluation worker to the same Redis instance. Use the same LiveKit project, model endpoint, and `INTERNAL_API_TOKEN` in the backend and voice worker. PostgreSQL, Redis, FalkorDB, LiveKit, Deepgram, and the model endpoint remain external services.
-
-Run migrations yourself from a machine that can reach the managed database, before starting the application. After installing workspace dependencies, run this command from the repository root to apply migrations from `packages/db/prisma/migrations` using `packages/db/.env`:
-
-```bash
-bun run db:migrate:deploy
-```
-
-The backend image generates the Prisma client during its build. Client generation creates application code from the schema; it does not apply migrations or copy database data. Migration files remain in the repository for your manual migration workflow. The application containers do not run migrations on startup.
-
-The web image contains no public backend URL. Serve the web app and backend behind one origin so browser requests to `/api/*` reach the backend and authentication cookies remain same-origin. The EC2 deployment's Caddy configuration does this. Add that public frontend origin to `CORS_ALLOWED_ORIGINS`, and set `BETTER_AUTH_URL` to it.
-
-If a provider runs on the Docker host, use `host.docker.internal` instead of `localhost` in its configured URL on Docker Desktop. A self-hosted LiveKit URL must also be reachable by the browser, since it is returned with the session token.
-
-Build individual images from the same root:
-
-```bash
-docker build -f apps/backend/Dockerfile -t ai-interview-backend:local .
-docker build -f apps/voice-agent/Dockerfile -t ai-interview-voice-agent:local .
-docker build -f apps/evaluation-worker/Dockerfile -t ai-interview-evaluation-worker:local .
-docker build -f apps/web/Dockerfile -t ai-interview-web:local .
-```
-
-Run the images individually with Docker or your deployment platform. Supply the backend, voice worker, and evaluation worker environment variables at runtime. The voice worker's `BACKEND_BASE_URL` must resolve to the backend from inside its container. The evaluation worker needs the same `DATABASE_URL`, `BULLMQ_REDIS_URL`, and model-router credentials as the backend; it has no listening port. `apps/backend` and `apps/evaluation-worker` connect to Redis, so it must be reachable from both containers. Publish port 8080 for the backend and port 3000 for the web app when running locally, and wait for the backend's `/health` endpoint before starting the voice worker.
-
-The voice image runs the worker in LiveKit's production `start` mode. Its health endpoint is on internal port 8081; it needs no published audio port because it connects to LiveKit. Mount persistent storage at `/app/data/voice-outbox` to preserve unacknowledged voice events across container replacement. Allow up to 65 minutes for active interviews to drain when stopping the voice container, for example with Docker's `--stop-timeout 3900` option when creating it.
-
-Your managed database has its own lifecycle and backups, independent of the application containers.
-
-## Observability
-
-### Retained operational metrics
-
-Authenticated accounts can request `GET /api/v1/metrics`. The response is owner-scoped, uses `Cache-Control: no-store`, and includes up to the 200 most recent recorded rounds with the total available count and selection limit. Rounds without an allocated voice session are distinguishable from started rounds; unfinished started rounds remain in the completion-rate denominator. This is a recent selected history, not a lifetime or production-wide success rate.
-
-The endpoint reports:
-
-- Sample counts, mean, p50, p95, and maximum duration by measured stage, including model requests, backend attempts, and voice response/startup events. Failed and cancelled samples are counted separately from successful latency samples.
-- Model request/failure counts, reported input/output/cached tokens, streaming-STT audio usage, TTS characters, and provider request counts where available. Streaming STT usage duration is not treated as transcript latency.
-- Repeat requests handled, disconnects, voice errors, observed retry attempts, and the number of eligible repository questions with valid pinned source references.
-- Coverage metadata, including rounds without summaries, event truncation, and busy rounds whose snapshot could not be refreshed during the read.
-
-`voice.response_start` is a worker engine-speaking proxy; it does not measure when audio became audible in the browser. Startup records keep the actual intentional wait separately. Only adjusted startup duration subtracts that recorded wait (normally 10 seconds); ordinary turn, backend, and model-call durations never subtract ten seconds.
-
-Numeric summaries survive raw-interview cleanup but are removed when their report or owning account is deleted. Deletion therefore changes the history available to aggregate. Reference coverage is not human-rated question relevance or factual correctness, and disconnect/retry counts do not establish a recovery-success rate. These instruments do not yet establish benchmark results, production reliability, or semantic evaluation accuracy; those claims require controlled measurements and an appropriate denominator.
-
-Optional `METRICS_LLM_INPUT_USD_PER_MILLION`, `METRICS_LLM_OUTPUT_USD_PER_MILLION`, `METRICS_STT_USD_PER_MINUTE`, and `METRICS_TTS_USD_PER_MILLION_CHARACTERS` rates enable an estimated cost from reported usage. With unknown rates or usage, the estimate is absent or incomplete rather than a claim of zero cost. It is not a provider invoice: cached-token rates, failed requests, multiple models, and provider-specific billing can differ from the configured approximation.
-
-Voice cleanup waits for the worker's SDK-close and journal-drain acknowledgment, with a bounded 30-second grace after report completion. If the worker never acknowledges, cleanup proceeds and metrics mark voice usage as incomplete. This prevents an unavailable worker from retaining raw interviews indefinitely. Repeat-request timings have their own `repeat_request` stage and are excluded from `candidate_turn` answer timings.
-
-For a reproducible controlled backend benchmark, run `bun run scripts/benchmark-system-design.ts --live` from `apps/backend` with `DATABASE_URL` pointing to a migrated disposable local database named `rr_metrics`. The script refuses managed databases, uses the configured live model with scripted answers and a shared fixture diagram, checks three-question/repeat/checkpoint/retention behavior for all ten problems, exports numeric results to `spec/benchmarks/system-design-controlled.json`, and deletes its test account. `--problems=chat-application,url-shortener` limits the selection. This excludes voice, browser networking, LiveKit dispatch, BullMQ delivery, drawing, and the intentional startup wait. The exported measurements describe this controlled development run; they do not establish production reliability or evaluation accuracy.
-
-### Event traces
-
-Interview events and timings are recorded in PostgreSQL, including retrieval, planning, candidate turns, analysis, action selection, tools, question generation, voice timings, interruptions, claim checks, and evaluation.
-
-To export traces, configure `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` in the backend. The exporter uses [Langfuse's OTLP endpoint](https://langfuse.com/docs/observability/get-started) and retries unacknowledged events from the database. Candidate answers and source excerpts are omitted from exported trace metadata. Without credentials, events remain local.
+If a report stays pending, check the evaluation worker and its Redis/database configuration. If voice never connects, check worker registration, matching LiveKit credentials and `BACKEND_BASE_URL`. For containers, a host service is reached through `host.docker.internal` on Docker Desktop. [More setup and Docker details](docs/development.md)
 
 ## Checks
 
-GitHub Actions runs code checks and builds all four Docker images (backend, web, voice-agent, evaluation-worker) on pull requests, pushes to `main`, and manual runs. After code checks pass on a `main` push, it publishes images to Docker Hub under `manav2854` with `sha-<full commit SHA>` tags. Publishing requires the `DOCKERHUB_TOKEN` repository secret. Follow [docs/ci-practice.md](docs/ci-practice.md) to configure credentials, trigger runs, diagnose a deliberate failure, and require CI before merging. CI does not apply database migrations.
-
-The separate **Deploy EC2** workflow deploys a successful CI image set over SSH. It defaults to a manual release button; automatic deployment after successful main CI is opt-in. It validates runtime env files and database access, recreates containers behind Caddy HTTPS, and checks the Better Auth session endpoint. Follow [docs/ec2-deployment.md](docs/ec2-deployment.md) for the required SSH secret, verified host keys, server env files, and runner network access. Database migrations remain manual.
-
 ```bash
-bun run check-types
 bun run lint
+bun run check-types
+bun test apps/backend/src apps/voice-agent/src apps/web/lib
 bun run build
-bun run --cwd apps/web test
-cd apps/backend
-bun run test
 ```
 
-Unit checks cover objective selection, phase transitions, repository references and path validation, evaluation evidence validation, trace metadata, the System Design snapshot normalization and graph probing logic, the problem catalog, and the evidence-only GitHub repository graph (import resolution, manifest dependencies, and the no-fact-without-evidence rule).
+Database integration tests are opt-in. Run them against a **disposable migrated test database**; graph and queue transport tests also need their corresponding services. Instructions and benchmark commands are in [development](docs/development.md#checks) and [measurements](docs/measurements.md#reproduce-the-backend-measurements).
 
-Integration checks require live services and are gated behind `RUN_DB_TESTS=1` (they are skipped otherwise, so the default `bun run test` never touches a real database). The FalkorDB graph tests need a reachable FalkorDB and skip themselves when it is unavailable. Set `RUN_DB_TESTS=1` with a test `DATABASE_URL` and, for the real BullMQ transport test, a reachable `BULLMQ_REDIS_URL`:
+CI runs code checks and builds four application images. Main pushes publish commit-tagged images when registry credentials are configured. EC2 deployment is a separate workflow, with manual deployment by default and automatic deployment available as an opt-in. [CI guide](docs/ci-practice.md) · [EC2 guide](docs/ec2-deployment.md)
 
-```bash
-cd apps/backend
-$env:RUN_DB_TESTS="1"
-bun test src
-```
+## Metrics and current limits
 
-These cover the System Design submission idempotency and revision gating, the graph walk and probe selection, and the evaluation relay (dispatch, Redis-outage durability, reconciliation, retry exhaustion, and the single-owner BullMQ round trip). A production build and a successful local Silero load do not establish live microphone, provider, or Langfuse delivery behavior; verify those with the configured services before deployment.
+Authenticated users can read their recent operational history at `GET /api/v1/metrics`: stage timings, p50/p95, sample counts, failures, cancellations, retries, model tokens, audio usage and source-reference coverage. Numeric summaries survive raw cleanup and are removed with the report or account.
 
-With the backend, web app, voice agent, and evaluation worker running against a disposable local database, run `bun run scripts/smoke-interview.ts` from the repository root. It creates a verified test account through Better Auth, keeps the session cookie, submits a minimal System Design diagram, checks an idempotent replay, allocates a real LiveKit session, sends generated test answers through the internal API, verifies the revision challenge, waits for the queued evaluation, and deletes the test account. It uses configured LiveKit and model credentials; it does not test microphone audio.
+- `voice.response_start` measures the worker entering its speaking state. Browser-audible latency needs a separate measurement.
+- The intentional **10-second startup wait** is recorded separately and subtracted only from adjusted startup. Ordinary turn durations do not subtract ten seconds.
+- The repository index is partial and bounded. Source references and matching quotes establish provenance; question relevance and assessment correctness still need human review.
+- Cost estimates need configured provider rates and complete usage. A missing estimate is unknown cost.
+
+## Documentation
+
+- [Architecture and runtime reference](docs/architecture.md): state, recovery, graph algorithms, evaluation and access controls.
+- [Development and operations](docs/development.md): detailed environment setup, Docker builds, observability and integration tests.
+- [Recorded measurements](docs/measurements.md): raw evidence, sample sizes, reproduction commands and interpretation.
+- [Repository decision interview spec](spec/repository-decision-interview-spec.md) and [generated question preview](spec/repository-decision-question-preview.json).
+- [System Design question research](spec/system-design-question-bank-research.md).
+- [Latency improvement spec](spec/interview-latency-improvement-spec.md).
