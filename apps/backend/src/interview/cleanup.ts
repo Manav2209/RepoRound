@@ -3,6 +3,7 @@ import { designGraphStore } from "../system-design/graph.js";
 import { memoryGraphStore } from "./memory-graph.js";
 import { InterviewBusyError, withInterviewLock } from "./runtime-lock.js";
 import { snapshotInterviewMetrics } from "../observability/metrics.js";
+import { activeSessions } from "./active-sessions.js";
 
 /** Idempotent cleanup intent survives deletion of the interview tree. */
 export async function reconcileInterviewCleanup(): Promise<void> {
@@ -63,6 +64,7 @@ export async function reconcileInterviewCleanup(): Promise<void> {
           for (const submission of current.designSubmissions)
             await designGraphStore().removeSubmission(submission.id);
           await prisma.interview.delete({ where: { id: intent.interviewId } });
+          activeSessions.evict(intent.interviewId);
           await prisma.interviewCleanup.deleteMany({
             where: { interviewId: intent.interviewId },
           });

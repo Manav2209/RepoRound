@@ -61,6 +61,15 @@ export const objectiveSchema = z.object({
   uncertainties: z.array(z.string().max(300)).max(5).default([]),
   sources: z.array(objectiveSourceSchema).max(5).default([]),
   scenario: appliedScenarioSchema.optional(),
+  decision: z
+    .object({
+      question: z.string().min(12).max(320),
+      followUps: z.array(z.string().min(12).max(320)).max(2),
+      observedBehavior: z.string().max(500),
+      assessmentFocus: z.string().max(500),
+      references: z.array(referenceSchema).min(1).max(3),
+    })
+    .optional(),
 });
 export const evidenceSchema = z.object({
   id: z.string(),
@@ -228,18 +237,25 @@ export const systemDesignStateSchema = z.object({
       loadAssumption: z.string(),
       constraints: z.array(z.string()),
       outOfScope: z.array(z.string()).optional(),
-      questionBank: z.object({
-        opening: z.string().min(1).max(320),
-        middle: z.array(z.object({
-          id: z.string().max(100),
-          prompt: z.string().min(1).max(320),
-          concern: z.enum(["FLOW", "BOTTLENECK", "STATE", "TRADEOFF"]),
-          componentKinds: z.array(componentKindSchema),
-          pathKinds: z.array(componentKindSchema).optional(),
-          coverageTerms: z.array(z.string()).optional(),
-        })).min(1).max(5),
-        final: z.string().min(1).max(320),
-      }).optional(),
+      questionBank: z
+        .object({
+          opening: z.string().min(1).max(320),
+          middle: z
+            .array(
+              z.object({
+                id: z.string().max(100),
+                prompt: z.string().min(1).max(320),
+                concern: z.enum(["FLOW", "BOTTLENECK", "STATE", "TRADEOFF"]),
+                componentKinds: z.array(componentKindSchema),
+                pathKinds: z.array(componentKindSchema).optional(),
+                coverageTerms: z.array(z.string()).optional(),
+              }),
+            )
+            .min(1)
+            .max(5),
+          final: z.string().min(1).max(320),
+        })
+        .optional(),
       clarificationAnswers: z.record(z.string(), z.string()),
       evaluationGoals: z.array(z.string()),
       challenge: z.object({
@@ -296,6 +312,9 @@ export const answerAssessmentSchema = z.object({
 });
 
 export const stateSchema = z.object({
+  activeStorage: z.literal("memory").optional(),
+  activeOwner: z.string().optional(),
+  activeFlushed: z.boolean().optional(),
   memoryFacts: z
     .array(
       z.object({
@@ -524,7 +543,7 @@ export function initialState(
       followUpsAsked: 0,
       appliedQuestionsAsked: 0,
       maxMainQuestions: Math.max(1, Math.min(5, mainCount)),
-      maxFollowUps: 3,
+      maxFollowUps: prepared.some((o) => o.decision) ? 2 : 3,
       maxAppliedQuestions: Math.min(3, appliedCount),
     },
     phase: "INTRO",

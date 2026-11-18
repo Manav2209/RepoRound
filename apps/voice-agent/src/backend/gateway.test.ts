@@ -3,6 +3,46 @@ import { expect, test } from "bun:test";
 import { BackendGateway } from "./gateway.js";
 import type { VoiceMetric } from "../session/telemetry.js";
 
+test("intentional cancellation aborts HTTP without retries or a failed-call count", async () => {
+  const previous = globalThis.fetch;
+  const controller = new AbortController();
+  const metrics: VoiceMetric[] = [];
+  let calls = 0;
+  globalThis.fetch = (async (_url, init) => {
+    calls++;
+    return new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener(
+        "abort",
+        () => reject(new DOMException("Cancelled", "AbortError")),
+        { once: true },
+      );
+      controller.abort();
+    });
+  }) as typeof fetch;
+  try {
+    const gateway = new BackendGateway(
+      "http://fixture.invalid",
+      "secret",
+      (metric) => metrics.push(metric),
+    );
+    await expect(
+      gateway.processTurn(
+        "int",
+        "session",
+        "turn",
+        "q1",
+        "answer",
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toBe(1);
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0]).toMatchObject({ cancelled: true, failed: false });
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
 test("turn retries count each attempt without leaking authorization or transcript", async () => {
   const previous = globalThis.fetch;
   const metrics: VoiceMetric[] = [];

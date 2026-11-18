@@ -55,6 +55,33 @@ test("startup excludes the actual intentional wait, while normal turns never sub
   expect(metrics[1]?.intentionalDelayMs).toBeUndefined();
 });
 
+test("worker stage metrics split node scheduling and post-backend audio rendering without double counting", () => {
+  const { telemetry, metrics, at } = fixture();
+  telemetry.turnCommitted("turn", "q1");
+  at(100);
+  telemetry.nodeEntered("turn");
+  telemetry.speechCreated("speech", "generate_reply");
+  at(2500);
+  telemetry.responseReady("turn", "q2");
+  at(2510);
+  telemetry.textHandoff("turn");
+  at(3000);
+  telemetry.engineSpeaking("speech");
+  expect(
+    metrics.find((metric) => metric.source === "node_entry")?.durationMs,
+  ).toBe(100);
+  expect(
+    metrics.find((metric) => metric.source === "text_handoff")?.durationMs,
+  ).toBe(10);
+  expect(
+    metrics.find((metric) => metric.source === "response_render_start")
+      ?.durationMs,
+  ).toBe(500);
+  expect(
+    metrics.find((metric) => metric.source === "response_start")?.durationMs,
+  ).toBe(3000);
+});
+
 test("cancelled and superseded turns cannot claim a later turn's speech", () => {
   const { telemetry, metrics, at } = fixture();
   telemetry.turnCommitted("old", "q1");

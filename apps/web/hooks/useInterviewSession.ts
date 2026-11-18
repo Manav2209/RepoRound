@@ -20,6 +20,7 @@ export interface UseInterviewSessionResult {
   agentState: AgentSpeakingState;
   agentReady: boolean;
   readyTimedOut: boolean;
+  resumePolicy?: "restart" | "resume";
   mute: () => Promise<void>;
   unmute: () => Promise<void>;
   endInterview: () => Promise<void>;
@@ -37,6 +38,9 @@ export function useInterviewSession(
   const [isMuted, setIsMuted] = useState(false);
   const [agentState, setAgentState] = useState<AgentSpeakingState>("unknown");
   const [readyTimedOut, setReadyTimedOut] = useState(false);
+  const [resumePolicy, setResumePolicy] = useState<"restart" | "resume">(
+    "resume",
+  );
   const sessionRef = useRef<InterviewSession | null>(null);
   const transcriptRef = useRef<TranscriptMessage[]>([]);
   const router = useRouter();
@@ -52,6 +56,7 @@ export function useInterviewSession(
       try {
         const interview = await getInterview(interviewId);
         if (cancelled) return;
+        setResumePolicy(interview.resumePolicy ?? "resume");
         if (
           ["completing", "completed", "evaluation_failed"].includes(
             interview.status,
@@ -154,6 +159,7 @@ export function useInterviewSession(
     agentState,
     agentReady: status === "connected" && agentState !== "unknown",
     readyTimedOut,
+    resumePolicy,
     reconnect: () => setRevision((n) => n + 1),
     retry: () => {
       setReadyTimedOut(false);

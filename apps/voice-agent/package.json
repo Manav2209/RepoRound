@@ -25,6 +25,7 @@
     "nanoid": "^3.3.18"
   },
   "devDependencies": {
+    "@types/bun": "^1.2.0",
     "@repo/eslint-config": "*",
     "@repo/typescript-config": "*",
     "@types/node": "^22.10.0",

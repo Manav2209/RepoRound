@@ -1,0 +1,22 @@
+{
+  "measuredAt": "2026-11-18T11:56:52.954Z",
+  "storage": "postgres",
+  "modelMode": "deterministic zero-network stub",
+  "combined": false,
+  "methodology": "Six sequential synthetic GitHub turns, warmed pool and a minimal repository fixture. Memory activation and fixture setup are outside the timed path. Includes answer processing/state/event handling; excludes completion flush, HTTP, voice and the intentional startup wait. No full interview or report is generated. Small diagnostic benchmark, not a production SLO or a live-voice comparison.",
+  "samplesMs": [
+    5341.535700000001, 2862.6121999999996, 2138.3655000000017,
+    2114.395800000002, 2558.315999999999, 2301.6129
+  ],
+  "latency": {
+    "count": 6,
+    "meanMs": 2886.1396833333342,
+    "p50Ms": 2301.6129,
+    "p95Ms": 5341.535700000001,
+    "maxMs": 5341.535700000001
+  },
+  "sqlQueriesPerTurn": [26, 26, 26, 26, 27, 27],
+  "modelCallsPerTurn": [2, 2, 2, 2, 2, 2],
+  "assessmentFailures": [0, 0, 0, 0, 0, 0],
+  "retainedEventCounts": [10, 10, 10, 10, 10, 10]
+}

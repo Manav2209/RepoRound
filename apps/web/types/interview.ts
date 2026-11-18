@@ -77,6 +77,7 @@ export interface ReportListItem {
 }
 
 export interface InterviewView {
+  resumePolicy?: "restart" | "resume";
   interviewId: string;
   status: InterviewStatus;
   mode?: InterviewMode;

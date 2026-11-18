@@ -11,7 +11,7 @@ import {
   interviewRepo,
   type InterviewWithContext,
 } from "../db/repositories/interview.repo.js";
-import { storeKnowledge } from "../github/knowledge.js";
+import { storeKnowledge, RepositoryKnowledge } from "../github/knowledge.js";
 import { withTrace } from "../observability/events.js";
 import { getProblem } from "../system-design/problems.js";
 import { initialSystemDesignState } from "./schemas.js";
@@ -26,7 +26,7 @@ export class InterviewService {
   constructor(
     llm: LlmClient,
     private readonly systemDesignDurationMinutes = DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES,
-    repositoryContextMode: RepositoryContextMode = "current",
+    repositoryContextMode: RepositoryContextMode = "diverse",
   ) {
     this.scraper = new GithubScraper({}, repositoryContextMode);
     this.analyzer = new GithubAnalyzer(llm);
@@ -134,8 +134,9 @@ export class InterviewService {
       );
       await storeKnowledge(id, scraped, context);
 
+      const knowledge = await RepositoryKnowledge.load(id);
       const plan = await withTrace(id, "interview_planning", () =>
-        this.planner.plan(context),
+        this.planner.plan(context, knowledge),
       );
 
       await prisma.interviewPlan.upsert({

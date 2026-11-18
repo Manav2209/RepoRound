@@ -3,6 +3,9 @@
   "ui": "tui",
   "globalPassThroughEnv": [
     "VOICE_OUTBOX_DIR",
+    "DATABASE_QUERY_EVENTS",
+    "GITHUB_ACTIVE_STORAGE",
+    "GITHUB_TURN_MODE",
     "LANGFUSE_BASE_URL",
     "LANGFUSE_PUBLIC_KEY",
     "LANGFUSE_SECRET_KEY",

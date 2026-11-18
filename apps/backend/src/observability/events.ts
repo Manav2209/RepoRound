@@ -2,17 +2,23 @@ import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, prisma } from "@repo/db";
 import { newId } from "../lib/ids.js";
+import { activeSessions } from "../interview/active-sessions.js";
 export const interviewTrace = new AsyncLocalStorage<{
   interviewId: string;
   step?: string;
   turnId?: string;
   questionId?: string;
+  signal?: AbortSignal;
 }>();
 export function withTrace<T>(
   interviewId: string,
   step: string,
   operation: () => Promise<T>,
-  correlation: { turnId?: string; questionId?: string } = {},
+  correlation: {
+    turnId?: string;
+    questionId?: string;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<T> {
   const parent = interviewTrace.getStore();
   return interviewTrace.run(
@@ -22,7 +28,11 @@ export function withTrace<T>(
       step,
       ...correlation,
     },
-    () => trace(interviewId, step, operation, correlation),
+    () =>
+      trace(interviewId, step, operation, {
+        turnId: correlation.turnId,
+        questionId: correlation.questionId,
+      }),
   );
 }
 
@@ -49,9 +59,9 @@ export async function emit(
     context?.interviewId === interviewId
       ? { turnId: context.turnId, questionId: context.questionId }
       : {};
-  await prisma.interviewEvent.create({
-    data: domainEvent(interviewId, type, { ...correlation, ...payload }),
-  });
+  const event = domainEvent(interviewId, type, { ...correlation, ...payload });
+  if (!activeSessions.record(interviewId, event))
+    await prisma.interviewEvent.create({ data: event });
 }
 
 export async function trace<T>(
@@ -91,11 +101,21 @@ export function otlpSpan(event: {
 }) {
   const data = event.payload as Record<string, unknown>;
   const start =
-    typeof data.startedAt === "number"
+    typeof data.startedAt === "number" && Number.isFinite(data.startedAt)
       ? data.startedAt
       : event.createdAt.getTime();
   const duration =
-    typeof data.durationMs === "number" ? Math.max(1, data.durationMs) : 1;
+    typeof data.durationMs === "number" && Number.isFinite(data.durationMs)
+      ? Math.max(1, data.durationMs)
+      : 1;
+  const nanoseconds = (milliseconds: number) => {
+    const whole = Math.trunc(milliseconds);
+    return (
+      BigInt(whole) * 1_000_000n +
+      BigInt(Math.round((milliseconds - whole) * 1_000_000))
+    );
+  };
+  const startNs = nanoseconds(start);
   const metadata = Object.fromEntries(
     Object.entries(data).filter(
       ([key]) =>
@@ -110,8 +130,8 @@ export function otlpSpan(event: {
       : { spanId: hash(`${event.interviewId}:root`, 16) }),
     name: event.type,
     kind: 1,
-    startTimeUnixNano: String(BigInt(start) * 1_000_000n),
-    endTimeUnixNano: String(BigInt(start + duration) * 1_000_000n),
+    startTimeUnixNano: String(startNs),
+    endTimeUnixNano: String(startNs + nanoseconds(duration)),
     attributes: [
       {
         key: "langfuse.trace.name",

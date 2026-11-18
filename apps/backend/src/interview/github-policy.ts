@@ -77,7 +77,9 @@ export function createGithubState(
     followUpsAsked: 0,
     appliedQuestionsAsked: 0,
     maxMainQuestions: limits.maxMainQuestions,
-    maxFollowUps: GITHUB_BUDGET.maxFollowUps,
+    maxFollowUps: objectives.some((o) => o.decision)
+      ? 2
+      : GITHUB_BUDGET.maxFollowUps,
     maxAppliedQuestions: limits.maxAppliedQuestions,
   };
 }
@@ -92,8 +94,7 @@ export function ensureGithubState(
       state.objectives[0];
     if (first) first.kind = "OPENING";
   }
-  for (const objective of state.objectives)
-    objective.kind ??= "REPOSITORY";
+  for (const objective of state.objectives) objective.kind ??= "REPOSITORY";
   if (state.github) return state.github;
   const byId = new Map(
     state.objectives.map((objective) => [objective.id, objective]),
@@ -199,6 +200,8 @@ function maybeFollowUp(
     (question) => question.objectiveId === currentObjective.id,
   ).length;
   if (askedForObjective >= 2) return null;
+  if (currentObjective.decision && !currentObjective.decision.followUps.length)
+    return null;
   const topic = currentObjective.topic.toLowerCase();
   const contradicted = [...state.claims]
     .reverse()
@@ -225,10 +228,10 @@ function maybeFollowUp(
     failedAnalysis ||
     (!!assessment &&
       (!assessment.answeredQuestion ||
-        (!assessment.explainedResponsibilities &&
+        (!currentObjective.decision &&
+          !assessment.explainedResponsibilities &&
           !assessment.identifiedTradeoffOrFailure)));
-  const inconsistent =
-    !!assessment && !assessment.consistentWithEvidence;
+  const inconsistent = !!assessment && !assessment.consistentWithEvidence;
   const weak = latestEvidence?.strength === "WEAK";
   return vague || inconsistent || weak
     ? { type: "ASK_CLARIFICATION", objectiveId: currentObjective.id }
@@ -294,11 +297,8 @@ export function selectGithubAction(
     if (!protectApplied) return followUp;
   }
   const totalLimit =
-    github.maxMainQuestions +
-    github.maxFollowUps +
-    github.maxAppliedQuestions;
-  if (state.questions.length >= totalLimit)
-    return { type: "END_INTERVIEW" };
+    github.maxMainQuestions + github.maxFollowUps + github.maxAppliedQuestions;
+  if (state.questions.length >= totalLimit) return { type: "END_INTERVIEW" };
 
   const opening = nextObjective(state, "OPENING");
   if (opening && github.mainQuestionsAsked === 0)
@@ -320,7 +320,9 @@ export function selectGithubAction(
     remainingMinutes > GITHUB_BUDGET.minMinutesForFifthMain;
   const lowTime = remainingMinutes <= GITHUB_BUDGET.appliedBlockLeadMinutes;
   const canAskRepository =
-    !!repository && !lowTime && (github.mainQuestionsAsked < mainTarget || fifthAllowed);
+    !!repository &&
+    !lowTime &&
+    (github.mainQuestionsAsked < mainTarget || fifthAllowed);
   if (canAskRepository)
     return { type: "ASK_NEW_TOPIC", objectiveId: repository.id };
   if (applied) {

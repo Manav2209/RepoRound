@@ -20,3 +20,30 @@ test("trace spans correlate by interview and omit candidate content", () => {
   expect(span.status.code).toBe(2);
   expect(JSON.stringify(span)).not.toContain("Private candidate answer");
 });
+
+test("fractional model and voice timings produce valid ordered OTLP timestamps", () => {
+  const span = otlpSpan({
+    id: "fractional",
+    interviewId: "int_1",
+    type: "voice.backend_roundtrip",
+    createdAt: new Date(1000),
+    payload: { startedAt: 1000.25, durationMs: 9448.7304 },
+  });
+  expect(span.startTimeUnixNano).toBe("1000250000");
+  expect(span.endTimeUnixNano).toBe("10448980400");
+  expect(BigInt(span.endTimeUnixNano)).toBeGreaterThan(
+    BigInt(span.startTimeUnixNano),
+  );
+});
+
+test("invalid timing values use a finite fallback rather than blocking the export batch", () => {
+  const span = otlpSpan({
+    id: "invalid",
+    interviewId: "int_1",
+    type: "voice.tts",
+    createdAt: new Date(1000),
+    payload: { startedAt: NaN, durationMs: Infinity },
+  });
+  expect(span.startTimeUnixNano).toBe("1000000000");
+  expect(span.endTimeUnixNano).toBe("1001000000");
+});

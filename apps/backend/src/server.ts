@@ -14,10 +14,7 @@ import { RealtimeEventService } from "./realtime/events.js";
 import { createInternalRouter } from "./api/internal.js";
 import { InterviewOrchestrator } from "./interview/orchestrator.js";
 import { createAuthCapabilitiesRouter } from "./api/auth.js";
-import {
-  browserSessionMiddleware,
-  interviewOwnership,
-} from "./api/session.js";
+import { browserSessionMiddleware, interviewOwnership } from "./api/session.js";
 import { createAuth } from "./auth/index.js";
 import { createMetricsRouter } from "./api/metrics.js";
 import { clientIp } from "./api/client-ip.js";
@@ -34,8 +31,12 @@ import {
 import { configureDesignGraph } from "./system-design/graph.js";
 import { reconcileDesignGraph } from "./system-design/submissions.js";
 import { requestCorrelation, serverError } from "./api/errors.js";
-import { configureMemoryGraph, reconcileMemoryGraph } from "./interview/memory-graph.js";
+import {
+  configureMemoryGraph,
+  reconcileMemoryGraph,
+} from "./interview/memory-graph.js";
 import { reconcileInterviewCleanup } from "./interview/cleanup.js";
+import { activeSessions } from "./interview/active-sessions.js";
 
 const config = loadConfig();
 const auth = createAuth(config);
@@ -65,6 +66,10 @@ const orchestrator = new InterviewOrchestrator(
   config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
   config.GITHUB_INTERVIEW_DURATION_MINUTES,
   config.REPOSITORY_CONTEXT_MODE,
+  {
+    activeStorage: config.GITHUB_ACTIVE_STORAGE,
+    githubTurnMode: config.GITHUB_TURN_MODE,
+  },
 );
 
 const worker = new JobWorker({
@@ -100,6 +105,50 @@ setInterval(() => {
     .catch((err: unknown) => console.error("evaluation relay failed", err));
 }, 2000);
 setInterval(() => {
+  for (const session of activeSessions.all()) {
+    if (
+      session.persisted &&
+      session.persistedAt &&
+      Date.now() - session.persistedAt > 60_000
+    ) {
+      activeSessions.evict(session.interviewId);
+      continue;
+    }
+    if (
+      !session.flushing &&
+      Date.now() - session.deadlineAt.getTime() > 300_000
+    ) {
+      activeSessions.evict(session.interviewId);
+      void prisma.interview
+        .updateMany({
+          where: {
+            id: session.interviewId,
+            status: { in: ["active", "completing"] },
+          },
+          data: {
+            status: "failed",
+            error: "Interview memory expired. Start a new interview.",
+          },
+        })
+        .catch(() => {});
+      continue;
+    }
+    if (
+      !session.persisted &&
+      !session.flushing &&
+      ((session.disconnectedAt &&
+        Date.now() - session.disconnectedAt.getTime() >= 30_000) ||
+        session.deadlineAt <= new Date())
+    )
+      void evaluationService
+        .finalize(
+          session.interviewId,
+          session.disconnectedAt ? "disconnected" : "time_limit",
+        )
+        .catch((error) =>
+          console.error("active interview finalization failed", error),
+        );
+  }
   void evaluationService
     .finalizeExpired(config.RECONNECT_WINDOW_SECONDS)
     .catch((err: unknown) =>
@@ -115,6 +164,12 @@ setInterval(() => {
     .updateMany({
       where: {
         status: "active",
+        interviewId: {
+          notIn: activeSessions
+            .all()
+            .filter((item) => !item.persisted)
+            .map((item) => item.interviewId),
+        },
         disconnectedAt: null,
         heartbeatAt: { lt: new Date(Date.now() - 60_000) },
       },
@@ -143,10 +198,15 @@ setInterval(() => {
   void Promise.allSettled([reconcileMemoryGraph(), reconcileInterviewCleanup()])
     .then((results) => {
       for (const result of results)
-        if (result.status === "rejected") console.error("memory reconciliation failed", result.reason);
+        if (result.status === "rejected")
+          console.error("memory reconciliation failed", result.reason);
     })
-    .catch((error: unknown) => console.error("memory reconciliation failed", error))
-    .finally(() => { reconcilingMemory = false; });
+    .catch((error: unknown) =>
+      console.error("memory reconciliation failed", error),
+    )
+    .finally(() => {
+      reconcilingMemory = false;
+    });
 }, 15_000);
 
 const app = new Hono();
@@ -184,7 +244,10 @@ app.use("/api/v1/interviews", interviewOwnership());
 app.use("/api/v1/interviews/:id", interviewOwnership());
 app.use("/api/v1/interviews/:id/*", interviewOwnership());
 
-app.route("/api/v1/interviews", createInterviewsRouter(interviewService));
+app.route(
+  "/api/v1/interviews",
+  createInterviewsRouter(interviewService, config.GITHUB_ACTIVE_STORAGE),
+);
 app.route("/api/v1/interviews", createSessionsRouter(sessionService));
 app.route("/api/v1/interviews", createCompletionRouter(evaluationService));
 app.route("/api/v1/interviews", createResultsRouter());
@@ -192,7 +255,12 @@ app.route(
   "/api/v1/interviews",
   createSystemDesignInterviewRouter(orchestrator),
 );
-app.route("/api/v1/system-design", createSystemDesignCatalogRouter(config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES));
+app.route(
+  "/api/v1/system-design",
+  createSystemDesignCatalogRouter(
+    config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
+  ),
+);
 app.route("/api/v1/metrics", createMetricsRouter());
 app.route(
   "/internal",

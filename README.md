@@ -17,7 +17,7 @@ RepoRound is a voice-first technical interview practice platform. Instead of rel
 | --- | --- | --- |
 | 🧑‍💻 | **GitHub project interviews** | Analyze a public repository at a pinned commit, ask code-specific questions, and validate factual claims against indexed evidence. |
 | 🏗️ | **System design interviews** | Choose a design challenge, draw a component/flow graph, discuss bottlenecks, and optionally revise the architecture after each answer and the final failure scenario. |
-| 🎙️ | **Real-time voice** | Use LiveKit, Silero VAD, and Deepgram for spoken interviews with interruptions and session reconnection. |
+| 🎙️ | **Real-time voice** | Use LiveKit, Silero VAD, and Deepgram for spoken interviews with interruptions; durable interview modes also support reconnection. |
 | 🧠 | **Adaptive interview engine** | Select phases, objectives, difficulty, and follow-ups through application-defined policies with model-assisted question generation. |
 | 📊 | **Evidence-backed results** | Evaluate recorded answers asynchronously, with category scores, confidence, candidate quotations, and an insufficient-evidence state. |
 | 🔄 | **Durable workflows** | Persist interview state and evaluation intent in PostgreSQL; dispatch asynchronous evaluations through Redis/BullMQ. |
@@ -81,19 +81,21 @@ The version 3 system design catalog narrows the ten problems to the requirements
 
 The implementation specification is in [spec/improvement-spec.md](spec/improvement-spec.md). Its October 1 delivery decisions supersede the original first-release scope.
 
-Repository interviews start with a brief summary of the submitted project, followed by a concrete question about its implementation. They do not ask the candidate to introduce the project or list which parts they owned. Prepared legacy plans use the same opening behavior.
+New repository interviews start with a brief project summary and a question about the requirement or constraint behind a concrete implementation choice. Preparation selects up to four distinct decision questions, each with pinned implementation excerpts, question-specific assessment criteria and optional follow-ups. The 15-minute round allows at most two follow-ups overall and has no separate mandatory scaling block. Questions explore reasons, plausible alternatives and consequences without assuming authorship or deliberate selection of every dependency. Existing saved plans retain their earlier structure.
+
+Repository retrieval defaults to `REPOSITORY_CONTEXT_MODE=diverse`: manifests and documentation have bounded initial slots, runtime sources are sampled across services, and a small reserved budget follows local imports into handlers and workflows. Analysis and planning use bounded implementation windows instead of file prefixes. References establish source locations, not semantic correctness; generated question quality still needs human review. `current` preserves the earlier sampling baseline. See [the decision interview spec](spec/repository-decision-interview-spec.md).
 
 In either mode, requests such as “repeat the question” replay the current substantive question without counting as an answer, adding scoring evidence, or advancing the interview. In System Design mode, a repeat request at a diagram checkpoint replays the preceding interview question; the candidate can answer it before returning to the checkpoint.
 
 ## Response latency
 
-During an interview, a final candidate turn follows:
+By default, a repository interview's final candidate turn follows:
 
 ```text
-STT → persist answer → lightweight answer analysis → select action → generate question → TTS
+STT → record answer in active memory → combined assessment/question proposal → local policy checks → TTS
 ```
 
-Answer analysis and question generation each have a four-second request limit and one attempt. If analysis fails, the transcript stays durable and the interviewer asks a clarification. Question generation has a safe fallback. These limits bound model requests; they are not a guarantee of total end-to-end latency.
+The combined repository request has a 6.5-second limit and one attempt. Invalid proposals use a source-grounded local fallback without another model call; failed assessment keeps the answer for later recovery. Active context and state stay in backend memory until completion, when the transcript, state and evaluation intent are saved. System Design retains one assessment request and its deterministic question bank. Legacy separate repository requests retain their four-second limits. These limits bound model requests; they are not a guarantee of total end-to-end latency. Measurements and remaining targets are in [spec/interview-latency-improvement-spec.md](spec/interview-latency-improvement-spec.md).
 
 Detailed repository claim checks, failed analysis recovery, and scoring run after the interview:
 
@@ -108,10 +110,10 @@ Claim verification checks whether fetched code supports or contradicts a factual
 ## State and recovery
 
 - Objective plans replace static question banks. Each question records its objective, phase, difficulty, reason, and code references when available.
-- Final answers are persisted before reasoning. Stable turn IDs deduplicate retries. Runtime leases and version checks serialize state changes across backend processes.
-- A GitHub interview clock starts when the voice session is allocated. A System Design clock starts when the interview is created, and reconnect or transient startup gaps before the voice session are credited back. Both survive worker restarts.
+- Default repository sessions record final answers in memory before reasoning and persist them at completion. System Design and legacy sessions persist answers before reasoning. Stable turn IDs deduplicate retries; memory sessions use per-turn ownership and cancellation, while durable sessions use runtime leases and version checks across backend processes.
+- A GitHub interview clock starts when the voice session is allocated. A System Design clock starts when the interview is created, and reconnect or transient startup gaps before the voice session are credited back. System Design retains durable runtime recovery; default GitHub sessions keep active state in a single backend process and require a fresh interview after disconnection or lost backend memory.
 - Session allocation is serialized in PostgreSQL. The session row exists before LiveKit dispatch.
-- Disconnects allow a configured reconnect window. Heartbeats detect stale workers. Reconnecting restores the pending question and persisted transcript.
+- System Design and legacy database-backed GitHub sessions retain the configured reconnect window. Default memory-backed GitHub sessions show a new-interview action after disconnection. Their available transcript is flushed before background evaluation; a backend process crash can lose unflushed turns, an accepted tradeoff for this mode.
 - The browser End action immediately stops further progression. Finalization and evaluation use unique durable job keys, expiring leases, and bounded retries.
 - Failed evaluations can be retried from the result page while their raw source material is retained. A completed report is final.
 - PostgreSQL jobs allow four total executions, including the initial attempt; lock contention and intentional deferrals do not spend that budget. BullMQ evaluation retries have their own policy.
@@ -133,7 +135,7 @@ Repository text and candidate answers are untrusted data. All structured model o
 
 System Design mode uses FalkorDB as its topology layer. PostgreSQL remains the source of truth for the interview and the submitted snapshot; the graph is a rebuildable projection used to choose questions. Each accepted canvas snapshot is installed under an immutable `submissionId`, so no two revisions share nodes or edges. The GitHub repository graph described above is a separate, in-memory evidence-only structure and is not stored in FalkorDB.
 
-Interview-scoped candidate facts are also projected to `InterviewFact` nodes in FalkorDB, separately from `DesignComponent` topology. Short summaries and source turn IDs are derived from the canonical PostgreSQL runtime after a committed turn. The question path selects facts from that runtime; graph fact retrieval is disabled until local measurements show a clear benefit. A graph outage leaves the projection pending and does not block questions or evaluation. A missing or corrupt runtime snapshot cannot currently be replayed from a full event log.
+Interview-scoped candidate facts are also projected to `InterviewFact` nodes in FalkorDB, separately from `DesignComponent` topology. Short summaries and source turn IDs are derived from the canonical PostgreSQL runtime after durable commits, including the completion flush for memory sessions. The question path selects facts from its active runtime; graph fact retrieval is disabled until local measurements show a clear benefit. A graph outage leaves the projection pending and does not block questions or evaluation. A missing or corrupt runtime snapshot cannot currently be replayed from a full event log.
 
 ### Data model
 
@@ -270,7 +272,11 @@ Database commands are root aliases for scripts in `packages/db`; Prisma dependen
 
 When applying the authentication migration to an existing deployment, stop the backend and voice workers first, take a database backup, apply the migration manually, and start images built from the updated code. The migration deletes anonymous browser sessions and their interviews; it does not assign them to an account. The previous backend requires the removed tables and cannot run against the new schema.
 
-The backend defaults to 15 minutes for GitHub repository interviews and 30 minutes for system design, including initial drawing. Both use a 300-second reconnect window. The system design duration change applies to new rounds; session allocation does not reset an existing runtime's saved deadline. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero VAD controls answer boundaries and detects interruptions.
+The backend defaults to 15 minutes for GitHub repository interviews and 30 minutes for system design, including initial drawing. System Design and legacy database-backed GitHub sessions use a 300-second reconnect window. The system design duration change applies to new rounds; session allocation does not reset an existing runtime's saved deadline. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero VAD controls answer boundaries and detects interruptions.
+
+Repository interviews default to `GITHUB_ACTIVE_STORAGE=memory` and `GITHUB_TURN_MODE=combined`. Repository context loads once, active conversation/state/telemetry stay in a bounded process-local store, and a normal answer uses one model request for assessment and a proposed question. Application policy still chooses the allowed next objective and uses a grounded fallback when the proposal does not pass checks. The opening uses a prepared source-backed fallback rather than another startup model request. Completion persists transcript, final state, metrics events and the durable END intent before background evaluation. Closing-speech events drain before raw cleanup. `GITHUB_ACTIVE_STORAGE=postgres` and `GITHUB_TURN_MODE=separate` retain the earlier implementation for comparison. System Design keeps its existing durable architecture/checkpoint flow and deterministic bank.
+
+Memory mode requires one backend owner for an active interview. It is bounded to 32 sessions and a serialized-content budget of 128 MiB overall / 16 MiB per session; these are accounting limits, not exact JavaScript heap measurements. Account/report cleanup evicts its active data. Disconnected sessions are finalized after a 30-second grace; abandoned rounds are distinguished in retained metrics. Do not deploy this mode across independent backend replicas without session ownership or a shared store. Transcript retention after completed-report cleanup remains unchanged.
 
 Start the backend, web app, voice worker, and evaluation worker from the repository root:
 
