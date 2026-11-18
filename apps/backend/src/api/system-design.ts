@@ -14,10 +14,11 @@ import {
 } from "../system-design/validation.js";
 import { stateSchema } from "../interview/schemas.js";
 import type { InterviewOrchestrator } from "../interview/orchestrator.js";
+import { DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES, SYSTEM_DESIGN_MAIN_QUESTIONS } from "../system-design/policy.js";
 
-export function createSystemDesignCatalogRouter(): Hono {
+export function createSystemDesignCatalogRouter(durationMinutes = DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES): Hono {
   const app = new Hono();
-  app.get("/problems", (c) => c.json({ problems: problemSummaries() }));
+  app.get("/problems", (c) => c.json({ durationMinutes, questionTarget: SYSTEM_DESIGN_MAIN_QUESTIONS, problems: problemSummaries() }));
   return app;
 }
 
@@ -76,6 +77,7 @@ export function createSystemDesignInterviewRouter(
             visibleRequirements: problem.visibleRequirements,
             loadAssumption: problem.loadAssumption,
             constraints: problem.constraints,
+            ...(problem.outOfScope ? { outOfScope: problem.outOfScope } : {}),
           }
         : problemSummary(interview.systemDesignProblemId ?? ""),
       activeRevision: active?.revision ?? 0,
@@ -85,7 +87,7 @@ export function createSystemDesignInterviewRouter(
       deadlineAt: runtime?.deadlineAt.toISOString() ?? null,
       remainingSeconds,
       questionCount: sd?.questionsAsked ?? 0,
-      questionTarget: sd?.questionTarget ?? 2,
+      questionTarget: sd?.questionTarget ?? SYSTEM_DESIGN_MAIN_QUESTIONS,
       checkpoint: checkpoint
         ? {
             id: checkpoint.id,

@@ -162,9 +162,11 @@ export default function RevisionPanel({
               ? "This was the final scenario. Make one last update, or finish the interview."
               : "You can revise your diagram now, or continue to the next question."}
           </p>
+          <p className="hint">Choose below when you are ready. Updating the diagram is optional; you do not need to answer this choice out loud.</p>
           <div className="revision-actions">
             <button
               type="button"
+              className="secondary"
               disabled={resolving || remaining <= 0}
               onClick={() => void choose("EDIT")}
             >

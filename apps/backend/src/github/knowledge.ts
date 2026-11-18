@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { type Prisma, prisma } from "@repo/db";
-import { safeRepositoryPath } from "./github.scraper.js";
+import {
+  safeRepositoryPath,
+  type RepositoryContextMode,
+} from "./github.scraper.js";
 import type {
   IndexedFile,
   IndexedSymbol,
@@ -55,6 +58,27 @@ export interface CodeExcerpt {
   content: string;
   reference: RepositoryReference;
 }
+
+const commonTerms = new Set(
+  "about after before does explain from happen happens have how into repository should that their then there these they this through uses using what when where which with work would".split(
+    " ",
+  ),
+);
+
+function words(text: string): string[] {
+  const split = text
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  const parts: string[] = split.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  if (split !== text)
+    parts.push(...(text.toLowerCase().match(/[a-z0-9]+/g) ?? []));
+  return parts;
+}
+
+function matches(terms: Set<string>, text: string): number {
+  return [...new Set(words(text))].filter((word) => terms.has(word)).length;
+}
+
 export class RepositoryKnowledge {
   constructor(
     readonly commitSha: string,
@@ -105,7 +129,11 @@ export class RepositoryKnowledge {
       .map((s) => this.getFile(s.path, Math.max(1, s.line - 2), 40)!)
       .filter(Boolean);
   }
-  search(query: string): CodeExcerpt[] {
+  search(
+    query: string,
+    mode: RepositoryContextMode = "current",
+  ): CodeExcerpt[] {
+    if (mode === "diverse") return this.searchByTopic(query);
     const terms = query
       .toLowerCase()
       .split(/[^a-z0-9_$]+/)
@@ -136,6 +164,65 @@ export class RepositoryKnowledge {
       if (selected.length === 3) break;
     }
     return selected;
+  }
+
+  private searchByTopic(query: string): CodeExcerpt[] {
+    const terms = new Set(
+      words(query)
+        .filter((word) => word.length > 2 && !commonTerms.has(word))
+        .slice(0, 12),
+    );
+    if (!terms.size) return [];
+    const symbols = new Map<string, Map<number, number>>();
+    for (const symbol of this.symbols) {
+      const score = matches(terms, symbol.name);
+      if (!score) continue;
+      const declarations =
+        symbols.get(symbol.path) ?? new Map<number, number>();
+      declarations.set(symbol.line, score);
+      symbols.set(symbol.path, declarations);
+    }
+    const hits: { path: string; line: number; score: number }[] = [];
+    for (const file of this.files) {
+      const pathScore = matches(terms, file.path);
+      const sourceWeight = /\.md$|(?:[._-](?:test|spec))\.[^/]+$/i.test(
+        file.path,
+      )
+        ? 0.7
+        : 1;
+      const declarations = symbols.get(file.path);
+      const lines = file.content.split("\n");
+      const matchedTerms = lines.map((line) => [
+        ...new Set(words(line).filter((word) => terms.has(word))),
+      ]);
+      let best: (typeof hits)[number] | undefined;
+      for (let i = 0; i < lines.length; i++) {
+        const declarationScore = declarations?.get(i + 1) ?? 0;
+        const lineScore = matchedTerms[i]!.length;
+        if (!lineScore && !declarationScore) continue;
+        const nearbyScore = new Set(
+          matchedTerms.slice(Math.max(0, i - 2), i + 3).flat(),
+        ).size;
+        const score =
+          (3 * lineScore +
+            2 * nearbyScore +
+            2 * pathScore +
+            2 * declarationScore) *
+          sourceWeight;
+        if (!best || score > best.score)
+          best = { path: file.path, line: i + 1, score };
+      }
+      if (best) hits.push(best);
+      else if (pathScore)
+        hits.push({ path: file.path, line: 1, score: pathScore });
+    }
+    return hits
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+      .flatMap((hit) => {
+        const excerpt = this.getFile(hit.path, Math.max(1, hit.line - 5), 30);
+        return excerpt ? [excerpt] : [];
+      });
   }
   getDependency(
     name: string,

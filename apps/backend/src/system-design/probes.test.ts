@@ -1,11 +1,7 @@
 import { expect, test } from "bun:test";
 import { findOrderedPath, selectProbe, type ProbeContext } from "./probes.js";
 import { getProblem } from "./problems.js";
-import type {
-  ComponentFact,
-  EdgeFact,
-  UpstreamFact,
-} from "./graph.js";
+import type { ComponentFact, EdgeFact, UpstreamFact } from "./graph.js";
 
 const component = (
   componentId: string,
@@ -21,7 +17,11 @@ const edge = (
   targetKind: string,
 ): EdgeFact => ({ edgeId, sourceId, sourceKind, targetId, targetKind });
 
-const notification = getProblem("notification-system")!;
+const notification = {
+  ...getProblem("notification-system")!,
+  version: 2,
+  questionBank: undefined,
+};
 
 function notifContext(overrides: Partial<ProbeContext> = {}): ProbeContext {
   const components = [
@@ -119,7 +119,9 @@ test("a terminal provider node keeps its probe and never requires outdegree", ()
   const probe = selectProbe(
     notifContext({ askedProbeIds: ["notif.async-buffer-ack"] }),
   );
-  const provider = notifContext().components.find((c) => c.componentId === "sms")!;
+  const provider = notifContext().components.find(
+    (c) => c.componentId === "sms",
+  )!;
   expect(provider.kind).toBe("external_service");
   expect(probe.referencedComponentIds).toContain("sms");
 });

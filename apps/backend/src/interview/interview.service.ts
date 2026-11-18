@@ -1,5 +1,8 @@
 import { prisma, Prisma, type InterviewStatus } from "@repo/db";
-import { GithubScraper } from "../github/github.scraper.js";
+import {
+  GithubScraper,
+  type RepositoryContextMode,
+} from "../github/github.scraper.js";
 import { GithubAnalyzer } from "../github/github.analyzer.js";
 import { InterviewPlanner } from "./interview.planner.js";
 import type { LlmClient } from "../llm/llm.client.js";
@@ -13,16 +16,19 @@ import { withTrace } from "../observability/events.js";
 import { getProblem } from "../system-design/problems.js";
 import { initialSystemDesignState } from "./schemas.js";
 import { objectivesForProblem } from "./strategies/system-design.js";
+import { DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES } from "../system-design/policy.js";
 
 export class InterviewService {
-  private readonly scraper = new GithubScraper();
+  private readonly scraper: GithubScraper;
   private readonly analyzer: GithubAnalyzer;
   private readonly planner: InterviewPlanner;
 
   constructor(
     llm: LlmClient,
-    private readonly systemDesignDurationMinutes = 15,
+    private readonly systemDesignDurationMinutes = DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES,
+    repositoryContextMode: RepositoryContextMode = "current",
   ) {
+    this.scraper = new GithubScraper({}, repositoryContextMode);
     this.analyzer = new GithubAnalyzer(llm);
     this.planner = new InterviewPlanner(llm);
   }
@@ -43,6 +49,9 @@ export class InterviewService {
           userId,
           status: "analyzing",
         },
+      });
+      await tx.interviewMetrics.create({
+        data: { interviewId: row.id, userId, mode: row.mode },
       });
       await tx.interviewJob.create({
         data: {
@@ -73,6 +82,14 @@ export class InterviewService {
           systemDesignProblemId: problem.id,
           userId,
           status: "created",
+        },
+      });
+      await tx.interviewMetrics.create({
+        data: {
+          interviewId: created.id,
+          userId,
+          mode: created.mode,
+          problemId: problem.id,
         },
       });
       const state = initialSystemDesignState({

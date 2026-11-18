@@ -1,16 +1,28 @@
 import { expect, test } from "bun:test";
-import { PROBLEMS, getProblem, problemSummaries } from "./problems.js";
+import {
+  PROBLEMS,
+  PROBLEM_VERSION,
+  getProblem,
+  problemSummaries,
+} from "./problems.js";
 import { selectProbe, type ProbeContext } from "./probes.js";
 import type { ComponentFact, EdgeFact } from "./graph.js";
 
-const REPRESENTATIVES = ["notification-system", "url-shortener", "chat-application"];
+const REPRESENTATIVES = [
+  "notification-system",
+  "url-shortener",
+  "chat-application",
+];
 
 test("the catalog exposes ten unique, versioned, fully-populated problems", () => {
   expect(PROBLEMS).toHaveLength(10);
   const ids = PROBLEMS.map((p) => p.id);
   expect(new Set(ids).size).toBe(10);
   for (const problem of PROBLEMS) {
-    expect(problem.version).toBe(2);
+    expect(problem.version).toBe(PROBLEM_VERSION);
+    expect(problem.questionBank).toBeDefined();
+    expect(problem.visibleRequirements.length).toBeLessThanOrEqual(3);
+    expect(problem.outOfScope?.length).toBeGreaterThan(0);
     expect(problem.title.length).toBeGreaterThan(0);
     expect(problem.brief.length).toBeGreaterThan(0);
     expect(problem.visibleRequirements.length).toBeGreaterThan(0);
@@ -35,6 +47,7 @@ test("ProblemSummary omits internal-only configuration", () => {
       visibleRequirements: summary.visibleRequirements,
       loadAssumption: summary.loadAssumption,
       constraints: summary.constraints,
+      outOfScope: summary.outOfScope,
     });
   }
 });
@@ -75,7 +88,10 @@ function facts(): { components: ComponentFact[]; edges: EdgeFact[] } {
   return { components, edges };
 }
 
-function contextFor(problemId: string, askedProbeIds: string[] = []): ProbeContext {
+function contextFor(
+  problemId: string,
+  askedProbeIds: string[] = [],
+): ProbeContext {
   const problem = getProblem(problemId)!;
   const { components, edges } = facts();
   return {
@@ -84,19 +100,19 @@ function contextFor(problemId: string, askedProbeIds: string[] = []): ProbeConte
     revision: 1,
     components,
     edges,
-    upstreamByProvider: { sms: [{ upstreamId: "worker", upstreamLabel: "Delivery Worker" }] },
+    upstreamByProvider: {
+      sms: [{ upstreamId: "worker", upstreamLabel: "Delivery Worker" }],
+    },
     askedProbeIds,
   };
 }
 
-test("the shared probe policy selects a graph-grounded probe for each representative", () => {
+test("the versioned bank selects a problem-specific probe for each representative", () => {
   const notification = selectProbe(contextFor("notification-system"));
-  expect(notification.probeId).toBe("notif.async-buffer-ack");
-  expect(notification.graphPath).toEqual(["api", "queue", "worker"]);
+  expect(notification.probeId).toBe("notification-system.duplicate-request");
 
   const chat = selectProbe(contextFor("chat-application"));
-  expect(chat.probeId).toBe("generic.async");
-  expect(chat.graphPath).toEqual(["api", "queue", "worker"]);
+  expect(chat.probeId).toBe("chat-application.message-order");
 
   for (const problemId of REPRESENTATIVES) {
     const probe = selectProbe(contextFor(problemId));
@@ -119,7 +135,7 @@ test("an unrecognizable topology cannot invent graph facts and stays determinist
     askedProbeIds: [],
   };
   const probe = selectProbe(ctx);
-  expect(probe.probeId).toBe("generic.scaling-fallback");
-  expect(probe.referencedComponentIds).toEqual([]);
+  expect(probe.probeId).toBe("url-shortener.code-collision");
+  expect(probe.referencedComponentIds).toEqual(["db"]);
   expect(probe.graphPath).toEqual([]);
 });

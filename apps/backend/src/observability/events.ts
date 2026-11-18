@@ -5,14 +5,24 @@ import { newId } from "../lib/ids.js";
 export const interviewTrace = new AsyncLocalStorage<{
   interviewId: string;
   step?: string;
+  turnId?: string;
+  questionId?: string;
 }>();
 export function withTrace<T>(
   interviewId: string,
   step: string,
   operation: () => Promise<T>,
+  correlation: { turnId?: string; questionId?: string } = {},
 ): Promise<T> {
-  return interviewTrace.run({ interviewId, step }, () =>
-    trace(interviewId, step, operation),
+  const parent = interviewTrace.getStore();
+  return interviewTrace.run(
+    {
+      ...(parent?.interviewId === interviewId ? parent : {}),
+      interviewId,
+      step,
+      ...correlation,
+    },
+    () => trace(interviewId, step, operation, correlation),
   );
 }
 
@@ -34,8 +44,13 @@ export async function emit(
   type: string,
   payload: Record<string, unknown> = {},
 ): Promise<void> {
+  const context = interviewTrace.getStore();
+  const correlation =
+    context?.interviewId === interviewId
+      ? { turnId: context.turnId, questionId: context.questionId }
+      : {};
   await prisma.interviewEvent.create({
-    data: domainEvent(interviewId, type, payload),
+    data: domainEvent(interviewId, type, { ...correlation, ...payload }),
   });
 }
 

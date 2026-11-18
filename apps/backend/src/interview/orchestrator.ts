@@ -1,12 +1,15 @@
 import { Prisma, prisma } from "@repo/db";
 import type { SelectedProbe } from "@repo/voice-types";
 import { RepositoryKnowledge } from "../github/knowledge.js";
+import type { RepositoryContextMode } from "../github/github.scraper.js";
 import { newId } from "../lib/ids.js";
 import type { LlmClient } from "../llm/llm.client.js";
 import { domainEvent, emit, withTrace } from "../observability/events.js";
 import { enqueue, JobDeferred } from "../jobs/queue.js";
 import { AnswerAnalyzer } from "./answer-analyzer.js";
 import { deriveMemoryFacts } from "./memory-facts.js";
+import { isRepeatRequest, questionToRepeat } from "./repeat-question.js";
+import { SYSTEM_DESIGN_MAIN_QUESTIONS } from "../system-design/policy.js";
 import { QuestionGenerator } from "./question-generator.js";
 import { prepareGithubObjectives, stateSchema } from "./schemas.js";
 import { withInterviewLock } from "./runtime-lock.js";
@@ -60,7 +63,7 @@ export function adaptDifficulty(
 }
 export type NextResponse =
   | { ended: true; deadlineAt?: string }
-  | { ended: false; questionId: string; question: string; deadlineAt?: string };
+  | { ended: false; questionId: string; question: string; deadlineAt?: string; checkpoint?: boolean; speak?: boolean };
 
 export class InterviewOrchestrator {
   private readonly analyzer: AnswerAnalyzer;
@@ -69,9 +72,10 @@ export class InterviewOrchestrator {
     private readonly llm: LlmClient,
     private readonly durationMinutes = 30,
     private readonly githubDurationMinutes = 15,
+    repositoryContextMode: RepositoryContextMode = "current",
   ) {
     this.analyzer = new AnswerAnalyzer(llm);
-    this.generator = new QuestionGenerator(llm);
+    this.generator = new QuestionGenerator(llm, repositoryContextMode);
   }
   private response(
     state: InterviewState,
@@ -87,6 +91,7 @@ export class InterviewOrchestrator {
           questionId: question.id,
           question: question.text,
           deadlineAt: deadlineAt?.toISOString(),
+          ...(question.checkpoint ? { checkpoint: true, speak: !state.systemDesign?.problemSnapshot?.questionBank } : {}),
         }
       : { ended: true };
   }
@@ -97,6 +102,7 @@ export class InterviewOrchestrator {
   ): void {
     const sd = state.systemDesign;
     if (!sd) throw new Error("System design interview state is missing");
+    delete state.repeatedQuestionId;
     state.questions.push({ ...question, sourceTurnId: turnId });
     if (turnId) state.processedTurns[turnId] = question.id;
     sd.pendingQuestionId = question.id;
@@ -134,23 +140,22 @@ export class InterviewOrchestrator {
     const sd = state.systemDesign;
     if (!sd) throw new Error("System design interview state is missing");
     state.ended = true;
+    delete state.repeatedQuestionId;
     state.endReason = "objectives_completed";
     sd.phase = "FINISHED";
     sd.pendingQuestionId = undefined;
     if (turnId) state.processedTurns[turnId] = "END";
     transition(state, "FINAL");
   }
-  private async askNextSystemDesign(
-    input: {
-      interviewId: string;
-      state: InterviewState;
-      problem: NonNullable<ReturnType<typeof getProblem>>;
-      checkpoint: SystemDesignCheckpoint;
-      deadlineAt: Date;
-      turnId?: string;
-      events: ReturnType<typeof domainEvent>[];
-    },
-  ): Promise<void> {
+  private async askNextSystemDesign(input: {
+    interviewId: string;
+    state: InterviewState;
+    problem: NonNullable<ReturnType<typeof getProblem>>;
+    checkpoint: SystemDesignCheckpoint;
+    deadlineAt: Date;
+    turnId?: string;
+    events: ReturnType<typeof domainEvent>[];
+  }): Promise<void> {
     const { state, problem, checkpoint, deadlineAt, turnId, events } = input;
     const sd = state.systemDesign;
     if (!sd) throw new Error("System design interview state is missing");
@@ -186,8 +191,7 @@ export class InterviewOrchestrator {
         problem,
         state,
         question: previous ?? failureQuestion(state, problem),
-        claimedGuaranteeOrTradeoff:
-          lastAssessment.claimedGuaranteeOrTradeoff,
+        claimedGuaranteeOrTradeoff: lastAssessment.claimedGuaranteeOrTradeoff,
         unresolvedAssumption: lastAssessment.unresolvedAssumption,
       });
       this.pushSystemDesignQuestion(state, question, turnId);
@@ -211,12 +215,12 @@ export class InterviewOrchestrator {
           revision: active.revision,
           store,
           askedProbeIds: sd.probesAsked,
+          coveredTopics: sd.answerAssessments.filter(assessment => assessment.addressedQuestion && assessment.strength === "STRONG").map(assessment => assessment.claimedGuaranteeOrTradeoff),
         });
         let probe = selectProbe(ctx);
         const excluded = [...sd.probesAsked];
         for (let i = 0; i < 6; i += 1) {
-          if (!/outage|failure|third-party|latency/.test(probe.probeId))
-            break;
+          if (!/outage|failure|third-party|latency/.test(probe.probeId)) break;
           excluded.push(probe.probeId);
           probe = selectProbe({ ...ctx, askedProbeIds: excluded });
         }
@@ -241,7 +245,10 @@ export class InterviewOrchestrator {
           events.push(
             domainEvent(input.interviewId, "system_design.probe", {
               probeId: probe.probeId,
+              submissionId: probe.submissionId,
               revision: probe.revision,
+              referencedComponentIds: probe.referencedComponentIds,
+              graphPath: probe.graphPath,
               reason: probe.reason,
             }),
           );
@@ -415,9 +422,7 @@ export class InterviewOrchestrator {
       create: {
         interviewId,
         data: initial as unknown as Prisma.InputJsonValue,
-        deadlineAt: new Date(
-          Date.now() + this.githubDurationMinutes * 60_000,
-        ),
+        deadlineAt: new Date(Date.now() + this.githubDurationMinutes * 60_000),
       },
       update: {},
     });
@@ -434,7 +439,11 @@ export class InterviewOrchestrator {
         return { ended: true };
       }
       if (state.questions.length || state.ended)
-        return this.response(state, state.questions.at(-1)?.id, row.deadlineAt);
+        return this.response(
+          state,
+          state.repeatedQuestionId ?? state.questions.at(-1)?.id,
+          row.deadlineAt,
+        );
       const remainingMinutes = Math.max(
         0,
         Math.floor((row.deadlineAt.getTime() - Date.now()) / 60_000),
@@ -524,9 +533,7 @@ export class InterviewOrchestrator {
       if (state.questions.length)
         return this.response(state, state.questions.at(-1)?.id, row.deadlineAt);
       sd.problemVersion = problem.version;
-      const remainingMinutes =
-        (row.deadlineAt.getTime() - Date.now()) / 60_000;
-      sd.questionTarget = remainingMinutes >= 11 ? 4 : remainingMinutes >= 7 ? 3 : 2;
+      sd.questionTarget = SYSTEM_DESIGN_MAIN_QUESTIONS;
       sd.phase = "DISCUSSION";
       const question = introQuestion(state, problem, active.snapshot);
       this.pushSystemDesignQuestion(state, question);
@@ -566,7 +573,7 @@ export class InterviewOrchestrator {
     questionId?: string;
   }): Promise<NextResponse> {
     await this.validateSession(input.interviewId, input.sessionId);
-    return withTrace(input.interviewId, "candidate_turn", () =>
+    return withTrace(input.interviewId, isRepeatRequest(input.text) ? "repeat_request" : "candidate_turn", () =>
       withInterviewLock(input.interviewId, async (token) => {
         const row = await prisma.interviewRuntime.findUniqueOrThrow({
           where: { interviewId: input.interviewId },
@@ -591,7 +598,24 @@ export class InterviewOrchestrator {
         });
         if (state.ended || interview.status !== "active")
           return { ended: true };
-        const lastQuestion = state.questions.at(-1);
+        if (isRepeatRequest(input.text)) {
+          const repeated = questionToRepeat(state);
+          if (!repeated) throw new Error("Interview has not started");
+          state.repeatedQuestionId = repeated.id;
+          state.processedTurns[input.turnId] = repeated.id;
+          if (state.systemDesign)
+            state.systemDesign.pendingQuestionId = repeated.id;
+          await this.save(input.interviewId, token, row.version, state, [
+            domainEvent(input.interviewId, "interviewer.question_repeated", {
+              questionId: repeated.id,
+            }),
+          ]);
+          return this.response(state, repeated.id, row.deadlineAt);
+        }
+        const lastQuestion =
+          state.questions.find(
+            (question) => question.id === state.repeatedQuestionId,
+          ) ?? state.questions.at(-1);
         if (!lastQuestion) throw new Error("Interview has not started");
         const questionId = input.questionId ?? lastQuestion.id;
         if (!existing)
@@ -627,6 +651,13 @@ export class InterviewOrchestrator {
             turnId: input.turnId,
             text: input.text,
           });
+        // A replay can target the substantive question before a diagram
+        // checkpoint. Accept its answer instead of treating it as a UI choice.
+        if (state.repeatedQuestionId && state.systemDesign?.checkpoint) {
+          state.systemDesign.checkpoint.status = "RESOLVED";
+          state.systemDesign.checkpoint.resolvedAt = new Date().toISOString();
+        }
+        delete state.repeatedQuestionId;
         lastQuestion.answerTurnId = input.turnId;
         const events = [
           domainEvent(input.interviewId, "candidate.transcript.final", {
@@ -634,7 +665,10 @@ export class InterviewOrchestrator {
             questionId,
           }),
         ];
-        if (row.deadlineAt <= new Date() && interview.mode !== "SYSTEM_DESIGN") {
+        if (
+          row.deadlineAt <= new Date() &&
+          interview.mode !== "SYSTEM_DESIGN"
+        ) {
           state.ended = true;
           state.endReason = "time_limit";
           transition(state, "FINAL");
@@ -662,6 +696,7 @@ export class InterviewOrchestrator {
             turnId: input.turnId,
             text: input.text,
             events,
+            question: lastQuestion,
           });
         const objective = state.objectives.find(
           (o) => o.id === lastQuestion.objectiveId,
@@ -828,6 +863,7 @@ export class InterviewOrchestrator {
           row.deadlineAt,
         );
       }),
+      { turnId: input.turnId, questionId: input.questionId },
     );
   }
   private async continueCheckpointTurn(input: {
@@ -938,19 +974,11 @@ export class InterviewOrchestrator {
         turnId,
         events,
       });
-      await this.save(
-        interviewId,
-        token,
-        row.version,
-        state,
-        events,
-        { id: turnId, status: "completed" },
-      );
-      return this.response(
-        state,
-        state.processedTurns[turnId],
-        row.deadlineAt,
-      );
+      await this.save(interviewId, token, row.version, state, events, {
+        id: turnId,
+        status: "completed",
+      });
+      return this.response(state, state.processedTurns[turnId], row.deadlineAt);
     }
     await this.save(interviewId, token, row.version, state, [], {
       id: turnId,
@@ -967,13 +995,14 @@ export class InterviewOrchestrator {
     turnId: string;
     text: string;
     events: ReturnType<typeof domainEvent>[];
+    question: QuestionRecord;
   }): Promise<NextResponse> {
     const { interviewId, token, row, state, turnId, text, events } = input;
     const sd = state.systemDesign;
     if (!sd) throw new Error("System design interview state is missing");
     const problem = sd.problemSnapshot ?? getProblem(sd.problemId);
     const active = await getActiveSubmission(interviewId);
-    const answered = state.questions.at(-1);
+    const answered = input.question;
     if (!problem || !active || !answered) {
       this.finishSystemDesign(state, turnId);
       await this.save(interviewId, token, row.version, state, events, {

@@ -4,7 +4,7 @@ import type {
   DesignView,
   InterviewResult,
   InterviewView,
-  ProblemSummary,
+  SystemDesignCatalog,
   ReportListItem,
   SessionInfo,
   TranscriptMessage,
@@ -87,7 +87,9 @@ export function getReports(signal?: AbortSignal): Promise<{
 }
 
 export function deleteReport(interviewId: string): Promise<void> {
-  return request(`/api/v1/interviews/${interviewId}/report`, { method: "DELETE" });
+  return request(`/api/v1/interviews/${interviewId}/report`, {
+    method: "DELETE",
+  });
 }
 
 export function getInterview(
@@ -99,12 +101,8 @@ export function getInterview(
   });
 }
 
-export function getSystemDesignProblems(): Promise<{
-  problems: ProblemSummary[];
-}> {
-  return request<{ problems: ProblemSummary[] }>(
-    "/api/v1/system-design/problems",
-  );
+export function getSystemDesignProblems(): Promise<SystemDesignCatalog> {
+  return request<SystemDesignCatalog>("/api/v1/system-design/problems");
 }
 
 export function createSystemDesignInterview(

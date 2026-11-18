@@ -75,9 +75,15 @@ The web app opens at [http://localhost:3000](http://localhost:3000), and the API
 
 The backend owns interview progression. Models extract information and generate questions; application code controls phases, objectives, difficulty, deadlines, and state changes. The voice worker speaks backend questions and cancels playback locally when candidate speech interrupts it.
 
-Two interview modes are supported. **GitHub** mode is repository-aware: the candidate discusses a repository and claims are checked against indexed source. **System Design** mode presents an immutable component-graph canvas: the candidate submits an architecture snapshot that is persisted in PostgreSQL and projected into a FalkorDB property graph, then the interviewer asks two or three diagram-grounded questions. After every answer the candidate can submit a new checkpoint-scoped revision or continue with the active one. The prepared failure scenario is always the last substantive question, followed by one optional final edit.
+Two interview modes are supported. **GitHub** mode is repository-aware: the candidate discusses a repository and claims are checked against indexed source. **System Design** mode provides a 30-minute round, including drawing, with three substantive question slots: the core flow, one problem-specific technical decision, and the prepared failure scenario last. The candidate submits an immutable architecture snapshot that is persisted in PostgreSQL and projected into FalkorDB. Optional diagram revisions are offered as silent UI checkpoints after answers; those choices and repeat requests do not consume substantive question slots. Ending early or running out of time produces incomplete coverage rather than invented answers.
+
+The version 3 system design catalog narrows the ten problems to the requirements those three questions can meaningfully assess, and includes explicit `outOfScope` items. A defensible alternative mechanism is acceptable; omitted optional features are not hidden grading requirements. Existing interviews retain their saved problem snapshot and deadline. The research and implementation decisions are documented in [spec/system-design-question-bank-research.md](spec/system-design-question-bank-research.md).
 
 The implementation specification is in [spec/improvement-spec.md](spec/improvement-spec.md). Its October 1 delivery decisions supersede the original first-release scope.
+
+Repository interviews start with a brief summary of the submitted project, followed by a concrete question about its implementation. They do not ask the candidate to introduce the project or list which parts they owned. Prepared legacy plans use the same opening behavior.
+
+In either mode, requests such as “repeat the question” replay the current substantive question without counting as an answer, adding scoring evidence, or advancing the interview. In System Design mode, a repeat request at a diagram checkpoint replays the preceding interview question; the candidate can answer it before returning to the checkpoint.
 
 ## Response latency
 
@@ -214,17 +220,17 @@ The hop bound in the traversal is clamped to `1..5` and interpolated into the qu
 ### Algorithms
 
 - **Ordered path search** (`findOrderedPath`): bounded, cycle-safe DFS over the graph facts. It finds a directed path whose visited nodes match a requested kind sequence while allowing unrelated intermediate nodes. The interviewer uses `api_service → message_queue → worker`, `api_service → database`, and `worker → external_service`.
-- **Deterministic probe selection** (`selectProbe`): application policy, not an LLM tool loop. It prefers a topology-specific probe, skips probe IDs already asked, and falls back to an arrow-direction or general scaling question when the graph is minimal. Question planning is two or three substantive questions: an opening question, at most one optional non-failure probe, and the scripted failure challenge last.
-- **Checkpoint flow**: each substantive answer records an assessment and opens a checkpoint. The backend speaks a checkpoint prompt, and the canvas either edits and republishes or continues. A checkpoint resolves only when the active revision is `READY`; an unchanged snapshot is a no-op. At most one targeted clarification is allowed, and it never counts as an additional substantive question.
+- **Deterministic probe selection** (`selectProbe`): application policy, not an LLM tool loop. It selects from the active problem's technical probes using the submitted topology and avoids probe IDs already asked. New rounds have three substantive slots: an opening flow question, one relevant technical decision, and the scripted failure challenge last. Missing or alternate components call for a question about the required guarantee, not an invented topology fact or a prescribed product.
+- **Checkpoint flow**: each substantive answer records an assessment and opens a silent UI checkpoint. The canvas offers an optional edit or continuation; the voice worker does not recite that menu as another interview question. A checkpoint resolves only when the active revision is `READY`; an unchanged snapshot is a no-op. A targeted clarification, when necessary, stays within the same substantive slot.
 - **Explainability**: every probe records `probeId`, `submissionId`, `revision`, `referencedComponentIds`, `graphPath`, and a human-readable `reason`; the selected probe is also written to `system_design.probe` interview events. Question wording is generated from those facts, and accepted revisions are compared with a deterministic node/edge diff, so evaluation can trace how the architecture changed.
 
-Configuration: `FALKORDB_HOST` (default `localhost`), `FALKORDB_PORT` (default `6379`), `FALKORDB_GRAPH` (default `ai_interviewer`), and `SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES` (default `15`, clamped to `10-15`). Read queries use a 400 ms timeout and writes a 5 s timeout; a failed connection is reset and re-established on the next call.
+Configuration: `FALKORDB_HOST` (default `localhost`), `FALKORDB_PORT` (default `6379`), `FALKORDB_GRAPH` (default `ai_interviewer`), and `SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES` (default `30`, validated from `10` to `30`). The product uses a flat 30-minute system design round with three core questions, not a duration selector. Repository rounds retain their separate 15-minute default. Read queries use a 400 ms timeout and writes a 5 s timeout; a failed connection is reset and re-established on the next call.
 
 ## Evaluation
 
 The evaluation includes technical depth, architecture, debugging, implementation, tradeoff reasoning, and communication. Final grading reads the recorded candidate answers directly, including adjacent speech fragments, instead of trusting speculative live summaries. Every assessed category includes a numeric score, confidence, and quotes checked against the originating candidate turns. Confidence expresses certainty of the assessment, not candidate ability: a clearly weak answer can receive a low score with high confidence. Unsupported categories and scores remain `INSUFFICIENT_EVIDENCE` / `null`; pipeline failures and unexplored objectives are not candidate weaknesses. Overall and dimension scores are calculated from assessed categories, excluding unassessed areas.
 
-The responsive result view includes a skill breakdown, short supporting answer quotes, and session details. A completed evaluation creates an independent account-owned report. Once its durable evaluation intent settles, the backend removes the raw transcript, runtime, repository knowledge, design snapshots, and interview-scoped FalkorDB data through a retryable cleanup intent. Reports can be viewed and deleted from the account page.
+The responsive result view includes a skill breakdown, short supporting answer quotes, and session details. A completed evaluation creates an independent account-owned report. Once its durable evaluation intent settles, the backend removes the raw transcript, runtime, repository knowledge, design snapshots, and interview-scoped FalkorDB data through a retryable cleanup intent. Numeric operational metrics are retained separately without candidate text. Reports can be viewed and deleted from the account page; deleting a report also deletes its retained metrics, and account deletion cascades through all of that account's metrics.
 
 Evaluation reads every transcript page. Candidate answers share the model input budget, retaining both the beginning and end of long answers. The completion event records included, omitted and shortened candidate-turn counts. Partial coverage is shown in the result view and feedback, with confidence capped at 0.65; omitted content is not evidence of a weakness. Older assessments without coverage metadata remain readable.
 
@@ -264,7 +270,7 @@ Database commands are root aliases for scripts in `packages/db`; Prisma dependen
 
 When applying the authentication migration to an existing deployment, stop the backend and voice workers first, take a database backup, apply the migration manually, and start images built from the updated code. The migration deletes anonymous browser sessions and their interviews; it does not assign them to an account. The previous backend requires the removed tables and cannot run against the new schema.
 
-The backend targets 10–15 minutes for both GitHub repository and system-design interviews, with a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero VAD controls answer boundaries and detects interruptions.
+The backend defaults to 15 minutes for GitHub repository interviews and 30 minutes for system design, including initial drawing. Both use a 300-second reconnect window. The system design duration change applies to new rounds; session allocation does not reset an existing runtime's saved deadline. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero VAD controls answer boundaries and detects interruptions.
 
 Start the backend, web app, voice worker, and evaluation worker from the repository root:
 
@@ -322,6 +328,29 @@ The voice image runs the worker in LiveKit's production `start` mode. Its health
 Your managed database has its own lifecycle and backups, independent of the application containers.
 
 ## Observability
+
+### Retained operational metrics
+
+Authenticated accounts can request `GET /api/v1/metrics`. The response is owner-scoped, uses `Cache-Control: no-store`, and includes up to the 200 most recent recorded rounds with the total available count and selection limit. Rounds without an allocated voice session are distinguishable from started rounds; unfinished started rounds remain in the completion-rate denominator. This is a recent selected history, not a lifetime or production-wide success rate.
+
+The endpoint reports:
+
+- Sample counts, mean, p50, p95, and maximum duration by measured stage, including model requests, backend attempts, and voice response/startup events. Failed and cancelled samples are counted separately from successful latency samples.
+- Model request/failure counts, reported input/output/cached tokens, streaming-STT audio usage, TTS characters, and provider request counts where available. Streaming STT usage duration is not treated as transcript latency.
+- Repeat requests handled, disconnects, voice errors, observed retry attempts, and the number of eligible repository questions with valid pinned source references.
+- Coverage metadata, including rounds without summaries, event truncation, and busy rounds whose snapshot could not be refreshed during the read.
+
+`voice.response_start` is a worker engine-speaking proxy; it does not measure when audio became audible in the browser. Startup records keep the actual intentional wait separately. Only adjusted startup duration subtracts that recorded wait (normally 10 seconds); ordinary turn, backend, and model-call durations never subtract ten seconds.
+
+Numeric summaries survive raw-interview cleanup but are removed when their report or owning account is deleted. Deletion therefore changes the history available to aggregate. Reference coverage is not human-rated question relevance or factual correctness, and disconnect/retry counts do not establish a recovery-success rate. These instruments do not yet establish benchmark results, production reliability, or semantic evaluation accuracy; those claims require controlled measurements and an appropriate denominator.
+
+Optional `METRICS_LLM_INPUT_USD_PER_MILLION`, `METRICS_LLM_OUTPUT_USD_PER_MILLION`, `METRICS_STT_USD_PER_MINUTE`, and `METRICS_TTS_USD_PER_MILLION_CHARACTERS` rates enable an estimated cost from reported usage. With unknown rates or usage, the estimate is absent or incomplete rather than a claim of zero cost. It is not a provider invoice: cached-token rates, failed requests, multiple models, and provider-specific billing can differ from the configured approximation.
+
+Voice cleanup waits for the worker's SDK-close and journal-drain acknowledgment, with a bounded 30-second grace after report completion. If the worker never acknowledges, cleanup proceeds and metrics mark voice usage as incomplete. This prevents an unavailable worker from retaining raw interviews indefinitely. Repeat-request timings have their own `repeat_request` stage and are excluded from `candidate_turn` answer timings.
+
+For a reproducible controlled backend benchmark, run `bun run scripts/benchmark-system-design.ts --live` from `apps/backend` with `DATABASE_URL` pointing to a migrated disposable local database named `rr_metrics`. The script refuses managed databases, uses the configured live model with scripted answers and a shared fixture diagram, checks three-question/repeat/checkpoint/retention behavior for all ten problems, exports numeric results to `spec/benchmarks/system-design-controlled.json`, and deletes its test account. `--problems=chat-application,url-shortener` limits the selection. This excludes voice, browser networking, LiveKit dispatch, BullMQ delivery, drawing, and the intentional startup wait. The exported measurements describe this controlled development run; they do not establish production reliability or evaluation accuracy.
+
+### Event traces
 
 Interview events and timings are recorded in PostgreSQL, including retrieval, planning, candidate turns, analysis, action selection, tools, question generation, voice timings, interruptions, claim checks, and evaluation.
 

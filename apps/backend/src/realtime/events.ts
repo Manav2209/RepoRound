@@ -35,10 +35,29 @@ export const realtimeEventSchema = z
         source: z.string().max(100).optional(),
         durationMs: z.number().finite().nonnegative().optional(),
         firstAudioMs: z.number().finite().nonnegative().optional(),
+        intentionalDelayMs: z.number().finite().nonnegative().optional(),
+        adjustedDurationMs: z.number().finite().nonnegative().optional(),
+        audioSeconds: z.number().finite().nonnegative().optional(),
+        charactersCount: z.number().finite().nonnegative().optional(),
+        requestCount: z.number().int().nonnegative().optional(),
+        failed: z.boolean().optional(),
+        cancelled: z.boolean().optional(),
+        streamed: z.boolean().optional(),
+        attempt: z.number().int().positive().optional(),
+        measurementKind: z.string().max(100).optional(),
+        speechId: z.string().max(100).optional(),
+        requestId: z.string().max(200).optional(),
+        transcriptionDelayMs: z.number().finite().nonnegative().optional(),
+        modelProvider: z.string().max(100).optional(),
+        modelName: z.string().max(200).optional(),
+        inputTokens: z.number().int().nonnegative().optional(),
+        outputTokens: z.number().int().nonnegative().optional(),
       })
       .default({}),
   })
   .superRefine((event, ctx) => {
+    if (event.type === "voice.metrics" && !event.payload.source)
+      ctx.addIssue({ code: "custom", message: "Voice metric source required" });
     if (
       event.type === "transcript.completed" &&
       (!event.payload.turnId ||
@@ -184,11 +203,8 @@ export class RealtimeEventService {
               : `voice.${event.type}`,
             {
               sessionId: event.sessionId,
-              questionId: event.payload.questionId,
-              interrupted: event.payload.interrupted,
-              source: event.payload.source,
-              durationMs: event.payload.durationMs,
-              firstAudioMs: event.payload.firstAudioMs,
+              // Keep telemetry fields/correlation, never transcript/error text.
+              ...Object.fromEntries(Object.entries(event.payload).filter(([key]) => !["text", "error", "detail", "role"].includes(key))),
             },
           ),
         });

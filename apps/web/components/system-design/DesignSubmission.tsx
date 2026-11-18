@@ -175,6 +175,14 @@ export default function DesignSubmission({
               ))}
             </ul>
           )}
+          {design.problem.outOfScope && design.problem.outOfScope.length > 0 && (
+            <div className="hint">
+              <p>Optional depth — not required for this round:</p>
+              <ul className="requirement-list">
+                {design.problem.outOfScope.map(item => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+          )}
         </section>
       )}
       <DesignCanvas

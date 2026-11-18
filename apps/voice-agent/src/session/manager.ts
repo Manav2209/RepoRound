@@ -5,6 +5,7 @@ import type {
   tts as ttsModule,
 } from "@livekit/agents";
 import { getLogger } from "../logger.js";
+import { VoiceTelemetry, type VoiceMetric } from "./telemetry.js";
 
 export type DomainEvent =
   | { type: "session.started"; sessionId: string }
@@ -31,13 +32,7 @@ export type DomainEvent =
       sessionId: string;
     }
   | { type: "speech.interrupted"; sessionId: string }
-  | {
-      type: "voice.metrics";
-      source: string;
-      durationMs: number;
-      firstAudioMs?: number;
-      sessionId: string;
-    }
+  | ({ type: "voice.metrics"; sessionId: string } & VoiceMetric)
   | {
       type: "error";
       error: string;
@@ -58,6 +53,7 @@ export interface SessionManagerOptions {
 
 export class SessionManager {
   readonly sessionId: string;
+  readonly telemetry: VoiceTelemetry;
   private readonly session: voice.AgentSession;
   private agent: voice.Agent | null = null;
   private readonly onEvent: (ev: DomainEvent) => void;
@@ -72,6 +68,13 @@ export class SessionManager {
   }: Omit<SessionManagerOptions, "agent">) {
     this.sessionId = crypto.randomUUID();
     this.onEvent = onEvent ?? ((): void => {});
+    this.telemetry = new VoiceTelemetry((metric) =>
+      this.onEvent({
+        type: "voice.metrics",
+        sessionId: this.sessionId,
+        ...metric,
+      }),
+    );
 
     this.session = new voice.AgentSession({
       stt,
@@ -108,11 +111,31 @@ export class SessionManager {
       if (ev.newState === "thinking") {
         this.fullText = "";
       }
+      if (ev.newState === "speaking") {
+        // This SDK exposes the active speech for tightly coupled adapters.
+        // Without a matching ID we omit the sample rather than pair an old reply.
+        const speech = this.session._activity?.currentSpeech;
+        if (speech && !speech.interrupted)
+          this.telemetry.engineSpeaking(speech.id);
+      }
       emit({
         type: "agent_state_changed",
         state: ev.newState,
         sessionId: this.sessionId,
       });
+    });
+
+    this.session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
+      const { speechHandle, source } = ev;
+      this.telemetry.speechCreated(speechHandle.id, source);
+      void speechHandle.waitForPlayout().then(
+        () =>
+          this.telemetry.speechFinished(
+            speechHandle.id,
+            speechHandle.interrupted,
+          ),
+        () => this.telemetry.speechFinished(speechHandle.id, true, true),
+      );
     });
 
     this.session.on(
@@ -153,11 +176,14 @@ export class SessionManager {
       },
     );
     this.session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
+      if (ev.newState === "speaking")
+        this.telemetry.cancelTurn("worker_user_resumed_speech");
       if (ev.newState === "speaking" && this.session.agentState === "speaking")
         emit({ type: "speech.interrupted", sessionId: this.sessionId });
     });
 
     this.session.on(voice.AgentSessionEventTypes.Error, (ev) => {
+      this.telemetry.cancelTurn("worker_voice_provider_error", undefined, true);
       const source =
         ev.error && typeof ev.error === "object" && "type" in ev.error
           ? String(ev.error.type)
@@ -177,32 +203,12 @@ export class SessionManager {
     this.session.on(
       voice.AgentSessionEventTypes.MetricsCollected,
       ({ metrics }) => {
-        if (metrics.type === "tts_metrics")
-          emit({
-            type: "voice.metrics",
-            source: "tts",
-            durationMs: metrics.durationMs,
-            firstAudioMs: metrics.ttfbMs,
-            sessionId: this.sessionId,
-          });
-        if (metrics.type === "stt_metrics")
-          emit({
-            type: "voice.metrics",
-            source: "stt",
-            durationMs: metrics.durationMs,
-            sessionId: this.sessionId,
-          });
-        if (metrics.type === "eou_metrics")
-          emit({
-            type: "voice.metrics",
-            source: "end_of_utterance",
-            durationMs: metrics.endOfUtteranceDelayMs,
-            sessionId: this.sessionId,
-          });
+        this.telemetry.providerMetric(metrics);
       },
     );
 
     this.session.on(voice.AgentSessionEventTypes.Close, (ev) => {
+      this.telemetry.close();
       emit({
         type: "session.close",
         reason: String(ev.reason),
@@ -220,7 +226,8 @@ export class SessionManager {
     });
   }
 
-  markResponseError(reason: string): void {
+  markResponseError(reason: string, turnId?: string): void {
+    this.telemetry.cancelTurn("worker_backend_response_failed", turnId, true);
     this.onEvent({
       type: "response.completed",
       fullText: this.fullText,
@@ -258,6 +265,7 @@ export class SessionManager {
   }
 
   async close(): Promise<void> {
+    this.telemetry.close();
     await this.session.close();
   }
 }

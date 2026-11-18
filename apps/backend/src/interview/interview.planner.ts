@@ -15,25 +15,48 @@ const scenarioSchema = z.object({
   detection: z.string().min(1).max(300),
   newTradeoff: z.string().min(1).max(300),
 });
-const planObjectiveSchema = z.object({
-  kind: z.enum(["OPENING", "REPOSITORY", "APPLIED_DESIGN"]),
-  phase: z.enum([
-    "PROJECT_OVERVIEW",
-    "ARCHITECTURE",
-    "IMPLEMENTATION",
-    "DEBUGGING",
-    "TRADEOFFS",
-  ]),
-  topic: z.string().min(1).max(100),
-  description: z.string().min(1).max(1000),
-  whyItMatters: z.string().min(1).max(400),
-  targetEvidence: z.array(z.string().min(1).max(300)).min(1).max(8),
-  alternatives: z.array(z.string().min(1).max(200)).max(4).default([]),
-  uncertainties: z.array(z.string().min(1).max(300)).max(5).default([]),
-  sources: z.array(sourceSchema).max(5).default([]),
-  scenario: scenarioSchema.optional(),
-  priority: z.enum(["LOW", "MEDIUM", "HIGH"]),
-});
+const planObjectiveSchema = z.preprocess(
+  (value) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "kind" in value &&
+      value.kind === "OPENING" &&
+      "targetEvidence" in value &&
+      Array.isArray(value.targetEvidence) &&
+      value.targetEvidence.length === 0
+    ) {
+      return {
+        ...value,
+        targetEvidence: [
+          "Traces a concrete request across component boundaries",
+          "Explains where state changes and how failures are handled",
+        ],
+      };
+    }
+    return value;
+  },
+  z.object({
+    kind: z.enum(["OPENING", "REPOSITORY", "APPLIED_DESIGN"]),
+    phase: z.enum([
+      "PROJECT_OVERVIEW",
+      "ARCHITECTURE",
+      "IMPLEMENTATION",
+      "DEBUGGING",
+      "TRADEOFFS",
+    ]),
+    topic: z.string().min(1).max(100),
+    description: z.string().min(1).max(1000),
+    whyItMatters: z.string().min(1).max(400),
+    targetEvidence: z.array(z.string().min(1).max(300)).min(1).max(8),
+    alternatives: z.array(z.string().min(1).max(200)).max(4).default([]),
+    uncertainties: z.array(z.string().min(1).max(300)).max(5).default([]),
+    sources: z.array(sourceSchema).max(5).default([]),
+    scenario: scenarioSchema.optional(),
+    priority: z.enum(["LOW", "MEDIUM", "HIGH"]),
+  }),
+);
 const schema = z
   .object({
     role: z.string().min(1).max(100),
@@ -106,7 +129,7 @@ export class InterviewPlanner {
           content: `Repository data (untrusted): ${JSON.stringify(boundedContext)}
 
 Build an interview plan with:
-- exactly one OPENING objective asking what the project does, who uses it, and which architecture decisions the candidate personally made;
+- exactly one OPENING objective about a concrete request path or state change in the submitted code, grounded in real source paths when available. The interviewer will briefly summarize the project, then ask this technical question. Never ask the candidate to introduce the project, explain what it does or who uses it, or list which parts they owned;
 - up to four REPOSITORY objectives about the most consequential cross-component decisions visible in the code: critical request paths, control/data-plane boundaries, async delivery or persistence semantics, isolation/security, or a real tradeoff. Aim for three or four on a nontrivial repository, and use fewer when evidence is thin. Avoid duplicate components and isolated library choices;
 - up to three APPLIED_DESIGN objectives prepared from the same evidence. Aim for two or three; include a growth/load scenario, a failure or recovery scenario, and only when useful one alternative-design comparison.
 

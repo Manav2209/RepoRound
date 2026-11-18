@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { RepositoryKnowledge } from "../github/knowledge.js";
+import type { RepositoryContextMode } from "../github/github.scraper.js";
 import { emit } from "../observability/events.js";
 import { claimSchema, evidenceSchema, phaseSchema } from "./schemas.js";
 import { transition } from "./policies.js";
@@ -21,6 +22,7 @@ export class ToolRegistry {
     private readonly interviewId: string,
     private readonly knowledge: RepositoryKnowledge,
     private readonly state: InterviewState,
+    private readonly repositoryContextMode: RepositoryContextMode = "current",
   ) {}
   async execute(
     name: string,
@@ -62,6 +64,7 @@ export class ToolRegistry {
       case "search_code":
         return this.knowledge.search(
           z.object({ query: z.string().max(200) }).parse(args).query,
+          this.repositoryContextMode,
         );
       case "get_dependency":
         return this.knowledge.getDependency(

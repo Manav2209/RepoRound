@@ -5,7 +5,11 @@ import { getProblem } from "../../system-design/problems.js";
 import { introQuestion } from "./system-design.js";
 
 test("the opening asks about a connection in the submitted revision", () => {
-  const problem = getProblem("notification-system")!;
+  const problem = {
+    ...getProblem("notification-system")!,
+    version: 2,
+    questionBank: undefined,
+  };
   const state = initialSystemDesignState({
     problemId: problem.id,
     activeRevision: 1,

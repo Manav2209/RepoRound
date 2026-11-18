@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { InterviewObjective, InterviewState } from "./interview.types.js";
+import { SYSTEM_DESIGN_MAIN_QUESTIONS } from "../system-design/policy.js";
 
 export const questionKindSchema = z.enum([
   "OPENING",
@@ -216,23 +217,38 @@ export const systemDesignAnswerAssessmentSchema = z.object({
 export const systemDesignStateSchema = z.object({
   problemId: z.string().min(1).max(100),
   problemVersion: z.number().int().positive().default(1),
-  problemSnapshot: z.object({
-    id: z.string(),
-    version: z.number().int().positive(),
-    title: z.string(),
-    difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
-    brief: z.string(),
-    visibleRequirements: z.array(z.string()),
-    loadAssumption: z.string(),
-    constraints: z.array(z.string()),
-    clarificationAnswers: z.record(z.string(), z.string()),
-    evaluationGoals: z.array(z.string()),
-    challenge: z.object({
+  problemSnapshot: z
+    .object({
       id: z.string(),
-      prompt: z.string(),
-      targetConcepts: z.array(z.string()),
-    }),
-  }).optional(),
+      version: z.number().int().positive(),
+      title: z.string(),
+      difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
+      brief: z.string(),
+      visibleRequirements: z.array(z.string()),
+      loadAssumption: z.string(),
+      constraints: z.array(z.string()),
+      outOfScope: z.array(z.string()).optional(),
+      questionBank: z.object({
+        opening: z.string().min(1).max(320),
+        middle: z.array(z.object({
+          id: z.string().max(100),
+          prompt: z.string().min(1).max(320),
+          concern: z.enum(["FLOW", "BOTTLENECK", "STATE", "TRADEOFF"]),
+          componentKinds: z.array(componentKindSchema),
+          pathKinds: z.array(componentKindSchema).optional(),
+          coverageTerms: z.array(z.string()).optional(),
+        })).min(1).max(5),
+        final: z.string().min(1).max(320),
+      }).optional(),
+      clarificationAnswers: z.record(z.string(), z.string()),
+      evaluationGoals: z.array(z.string()),
+      challenge: z.object({
+        id: z.string(),
+        prompt: z.string(),
+        targetConcepts: z.array(z.string()),
+      }),
+    })
+    .optional(),
   phase: systemDesignPhaseSchema.default("DISCUSSION"),
   activeRevision: z.number().int().nonnegative().default(0),
   activeSubmissionId: z.string().max(100).optional(),
@@ -247,7 +263,10 @@ export const systemDesignStateSchema = z.object({
   selectedProbeIds: z.array(z.string()).default([]),
   checkpoint: systemDesignCheckpointSchema.optional(),
   checkpoints: z.array(systemDesignCheckpointSchema).max(10).default([]),
-  answerAssessments: z.array(systemDesignAnswerAssessmentSchema).max(12).default([]),
+  answerAssessments: z
+    .array(systemDesignAnswerAssessmentSchema)
+    .max(12)
+    .default([]),
   pendingQuestionId: z.string().max(100).optional(),
   lastRevisionDiff: architectureRevisionDiffSchema.optional(),
 });
@@ -277,19 +296,29 @@ export const answerAssessmentSchema = z.object({
 });
 
 export const stateSchema = z.object({
-  memoryFacts: z.array(z.object({
-    id: z.string(),
-    sourceTurnId: z.string(),
-    questionId: z.string(),
-    objectiveId: z.string(),
-    topic: z.string().max(100),
-    text: z.string().max(300),
-    observedAt: z.string(),
-    provenance: z.literal("candidate_answer"),
-    confidence: z.number().min(0).max(1),
-    verification: z.enum(["candidate_claim", "supported", "contradicted", "uncertain"]),
-    probed: z.boolean(),
-  })).max(120).optional(),
+  memoryFacts: z
+    .array(
+      z.object({
+        id: z.string(),
+        sourceTurnId: z.string(),
+        questionId: z.string(),
+        objectiveId: z.string(),
+        topic: z.string().max(100),
+        text: z.string().max(300),
+        observedAt: z.string(),
+        provenance: z.literal("candidate_answer"),
+        confidence: z.number().min(0).max(1),
+        verification: z.enum([
+          "candidate_claim",
+          "supported",
+          "contradicted",
+          "uncertain",
+        ]),
+        probed: z.boolean(),
+      }),
+    )
+    .max(120)
+    .optional(),
   mode: z.enum(["GITHUB", "SYSTEM_DESIGN"]).optional(),
   github: githubStateSchema.optional(),
   systemDesign: systemDesignStateSchema.optional(),
@@ -300,6 +329,7 @@ export const stateSchema = z.object({
   evidence: z.array(evidenceSchema),
   questions: z.array(questionRecordSchema),
   processedTurns: z.record(z.string()),
+  repeatedQuestionId: z.string().optional(),
   ended: z.boolean(),
   skills: z
     .record(
@@ -377,12 +407,12 @@ function defaultOpeningObjective(): InterviewObjective {
   return {
     id: "obj_opening",
     phase: "PROJECT_OVERVIEW",
-    topic: "Project purpose and ownership",
+    topic: "Main request flow",
     description:
-      "What the project does, who it serves, and which decisions the candidate personally made",
+      "Trace one concrete request through the repository's components and explain where state changes and failures are handled",
     targetEvidence: [
-      "explains the project purpose and its users",
-      "identifies their personal contribution and decisions",
+      "traces a concrete request across component boundaries",
+      "explains where state changes and how failures are handled",
     ],
     priority: "HIGH",
     status: "NOT_STARTED",
@@ -390,7 +420,7 @@ function defaultOpeningObjective(): InterviewObjective {
     attempts: 0,
     kind: "OPENING",
     whyItMatters:
-      "Separates repository facts from the candidate's claimed ownership.",
+      "Tests understanding of the implementation without asking for a generic project introduction.",
     alternatives: [],
     uncertainties: [],
     sources: [],
@@ -407,7 +437,9 @@ function defaultScenario(objective: InterviewObjective) {
   };
 }
 
-export function prepareGithubObjectives(objectives: unknown): InterviewObjective[] {
+export function prepareGithubObjectives(
+  objectives: unknown,
+): InterviewObjective[] {
   const parsed = objectiveSchema
     .array()
     .min(1)
@@ -445,8 +477,26 @@ export function prepareGithubObjectives(objectives: unknown): InterviewObjective
       phase: "TRADEOFFS" as const,
       scenario: o.scenario ?? defaultScenario(o),
     }));
+  const legacyOpening =
+    /purpose|ownership|personally made|personal contribution|what the project does/i.test(
+      `${opening.topic} ${opening.description}`,
+    );
+  const technicalOpening = legacyOpening
+    ? {
+        ...opening,
+        ...defaultOpeningObjective(),
+        id: opening.id,
+        sources: opening.sources?.length
+          ? opening.sources
+          : (repository[0]?.sources ?? []),
+      }
+    : opening;
   return [
-    { ...opening, kind: "OPENING" as const, phase: "PROJECT_OVERVIEW" as const },
+    {
+      ...technicalOpening,
+      kind: "OPENING" as const,
+      phase: "PROJECT_OVERVIEW" as const,
+    },
     ...repository,
     ...applied,
   ];
@@ -513,7 +563,7 @@ export function initialSystemDesignState(input: {
       activeRevision: input.activeRevision ?? 0,
       activeSubmissionId: input.activeSubmissionId,
       questionsAsked: 0,
-      questionTarget: 2,
+      questionTarget: SYSTEM_DESIGN_MAIN_QUESTIONS,
       clarificationAsked: false,
       failureAsked: false,
       challengeIssued: false,

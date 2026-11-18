@@ -64,25 +64,38 @@ export class LlmClient {
     if (messages.reduce((n, m) => n + m.content.length, 0) > 60000)
       throw new Error("LLM input budget exceeded");
     const startedAt = Date.now();
-    const res = await this.client.chat.completions.create(
-      {
-        model: this.model,
-        messages,
-        temperature: options.temperature ?? this.temperature,
-        max_tokens: Math.min(8192, options.maxTokens ?? 4096),
-        stream: false,
-      },
-      { timeout: options.timeoutMs ?? 12000 },
-    );
+    const clock = performance.now();
     const ctx = interviewTrace.getStore();
-    if (ctx)
-      await emit(ctx.interviewId, `llm.${ctx.step ?? "generation"}`, {
-        model: this.model,
-        startedAt,
-        durationMs: Date.now() - startedAt,
-        tokenUsage: res.usage,
-      }).catch(() => {});
-    return res.choices[0]?.message?.content ?? "";
+    let tokenUsage: unknown;
+    let failed = false;
+    try {
+      const res = await this.client.chat.completions.create(
+        {
+          model: this.model,
+          messages,
+          temperature: options.temperature ?? this.temperature,
+          max_tokens: Math.min(8192, options.maxTokens ?? 4096),
+          stream: false,
+        },
+        { timeout: options.timeoutMs ?? 12000 },
+      );
+      tokenUsage = res.usage;
+      return res.choices[0]?.message?.content ?? "";
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      // A timed-out or rejected request still belongs in the observed call
+      // count. Missing provider token usage remains unknown, never zero cost.
+      if (ctx)
+        await emit(ctx.interviewId, `llm.${ctx.step ?? "generation"}`, {
+          model: this.model,
+          startedAt,
+          durationMs: performance.now() - clock,
+          tokenUsage,
+          failed,
+        }).catch(() => {});
+    }
   }
 }
 
@@ -97,7 +110,10 @@ export async function structured<S extends z.ZodTypeAny>(
   for (let attempt = 0; attempt < (options.attempts ?? 2); attempt++) {
     let raw: unknown;
     try {
-      raw = await llm.completeJson<unknown>([...messages, ...feedback], options);
+      raw = await llm.completeJson<unknown>(
+        [...messages, ...feedback],
+        options,
+      );
       return schema.parse(raw);
     } catch (err) {
       error = err;

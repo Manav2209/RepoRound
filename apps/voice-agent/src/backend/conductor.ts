@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import type { BackendGateway, RealtimeEventInput } from "./gateway.js";
 import { newEventId, newTurnId } from "./gateway.js";
 import type { DomainEvent } from "../session/manager.js";
+import type { VoiceMetric } from "../session/telemetry.js";
 export interface LoggerLike {
   info(obj: Record<string, unknown>, msg?: string): void;
   warn(obj: Record<string, unknown>, msg?: string): void;
@@ -16,6 +17,8 @@ export class InterviewConductor {
   private draining = false;
   private stopped = false;
   private questionId: string | null = null;
+  private connected?: boolean;
+  private disconnectedAt?: number;
   private readonly journal: string;
   constructor(
     private readonly gateway: BackendGateway,
@@ -110,14 +113,49 @@ export class InterviewConductor {
     this.questionId = id;
   }
   heartbeat(connected: boolean): void {
+    if (this.connected === true && !connected) {
+      this.disconnectedAt = performance.now();
+      this.recordMetric({
+        source: "disconnect",
+        durationMs: 0,
+        requestCount: 1,
+        measurementKind: "worker_candidate_presence_heartbeat_proxy",
+      });
+    } else if (
+      this.connected === false &&
+      connected &&
+      this.disconnectedAt !== undefined
+    ) {
+      this.recordMetric({
+        source: "reconnect",
+        durationMs: Math.max(0, performance.now() - this.disconnectedAt),
+        requestCount: 1,
+        measurementKind: "worker_candidate_presence_heartbeat_proxy",
+      });
+      this.disconnectedAt = undefined;
+    }
+    this.connected = connected;
     this.post(connected ? "session.heartbeat" : "session.disconnected", {});
   }
-  async flush(): Promise<void> {
+  recordMetric(metric: VoiceMetric): void {
+    this.logger.info(
+      { interviewId: this.interviewId, sessionId: this.sessionId, ...metric },
+      "voice metric",
+    );
+    this.post("voice.metrics", { ...metric });
+  }
+  async flush(
+    options: { stop?: boolean; timeoutMs?: number } = {},
+  ): Promise<boolean> {
     await this.pending;
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + (options.timeoutMs ?? 20_000);
     while ((this.draining || this.queue.length) && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 100));
-    this.stopped = true;
+    const delivered = !this.draining && this.queue.length === 0;
+    // A failed drain never authorizes a worker_closed marker. Leave retained
+    // events in the durable journal for restart rather than silently dropping.
+    if (options.stop !== false || !delivered) this.stopped = true;
+    return delivered;
   }
   onSessionEvent(event: DomainEvent): void {
     switch (event.type) {
@@ -142,11 +180,10 @@ export class InterviewConductor {
         this.post("speech.interrupted", {});
         break;
       case "voice.metrics":
-        this.post("voice.metrics", {
-          source: event.source,
-          durationMs: event.durationMs,
-          firstAudioMs: event.firstAudioMs,
-        });
+        {
+          const { type: _type, sessionId: _sessionId, ...metric } = event;
+          this.recordMetric(metric);
+        }
         break;
       case "error":
         this.post(event.recoverable === false ? "session.failed" : "error", {

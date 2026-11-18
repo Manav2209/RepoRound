@@ -1,18 +1,13 @@
-import type { ArchitectureRevisionDiff, ProblemConfig } from "@repo/voice-types";
+import type {
+  ArchitectureRevisionDiff,
+  ProblemConfig,
+} from "@repo/voice-types";
 import type { MemoryFact } from "./memory-facts.js";
 
 export type InterviewDifficulty = "EASY" | "MEDIUM" | "HARD" | "EXPERT";
 export type SystemDesignConcern =
-  | "FLOW"
-  | "BOTTLENECK"
-  | "STATE"
-  | "TRADEOFF"
-  | "FAILURE"
-  | "CLARIFICATION";
-export type InterviewQuestionKind =
-  | "OPENING"
-  | "REPOSITORY"
-  | "APPLIED_DESIGN";
+  "FLOW" | "BOTTLENECK" | "STATE" | "TRADEOFF" | "FAILURE" | "CLARIFICATION";
+export type InterviewQuestionKind = "OPENING" | "REPOSITORY" | "APPLIED_DESIGN";
 export type GithubSegment = "OPENING" | "REPOSITORY" | "APPLIED_DESIGN";
 export type InterviewPhase =
   | "INTRO"
@@ -152,10 +147,7 @@ export type SystemDesignPhase =
   | "REVISION_REVIEW";
 
 export type SystemDesignCheckpointStatus =
-  | "AWAITING_CHOICE"
-  | "EDITING"
-  | "SUBMITTED"
-  | "RESOLVED";
+  "AWAITING_CHOICE" | "EDITING" | "SUBMITTED" | "RESOLVED";
 
 export interface SystemDesignCheckpoint {
   id: string;
@@ -216,6 +208,7 @@ export interface InterviewState {
   evidence: CandidateEvidence[];
   questions: QuestionRecord[];
   processedTurns: Record<string, string>;
+  repeatedQuestionId?: string;
   ended: boolean;
   skills?: Record<string, SkillState>;
   exploredTopics?: string[];

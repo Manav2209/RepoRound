@@ -163,6 +163,7 @@ model User {
   accounts      Account[]
   interviews    Interview[]
   reports       Report[]
+  interviewMetrics InterviewMetrics[]
 }
 
 model Report {
@@ -196,6 +197,24 @@ model InterviewCleanup {
   updatedAt   DateTime @updatedAt
 
   @@index([status, updatedAt])
+}
+
+// Numeric operational evidence survives raw interview cleanup. Account deletion
+// still removes it. Never store prompts, transcripts, repository excerpts or keys.
+model InterviewMetrics {
+  interviewId String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode InterviewMode
+  problemId String?
+  status String @default("created")
+  createdAt DateTime @default(now())
+  startedAt DateTime?
+  completedAt DateTime?
+  summary Json @default("{}")
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
 }
 
 model InterviewMemoryProjection {

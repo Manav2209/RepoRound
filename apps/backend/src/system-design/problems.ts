@@ -1,57 +1,55 @@
-import type {
-  ProblemConfig,
-  ProblemSummary,
-} from "@repo/voice-types";
+import type { ProblemConfig, ProblemSummary } from "@repo/voice-types";
+import { QUESTION_BANKS } from "./question-bank.js";
 
-export const PROBLEM_VERSION = 2;
+export const PROBLEM_VERSION = 3;
 
-const UNLISTED_CLARIFICATION =
-  "Make a reasonable assumption, state it, and continue.";
-
-export const PROBLEMS: ProblemConfig[] = [
+const CATALOG: ProblemConfig[] = [
   {
     id: "notification-system",
     version: PROBLEM_VERSION,
     title: "Design a Notification System",
     difficulty: "HARD",
     brief:
-      "Design a service that accepts notification requests and delivers email, SMS, and push notifications. Describe the major components and the message flow.",
+      "Design a service that accepts notification requests and delivers email or SMS asynchronously. Focus on durable acceptance, duplicate requests, and temporary provider failures.",
     visibleRequirements: [
-      "Notifications are accepted quickly by a public API.",
-      "Delivery is asynchronous from request acceptance.",
-      "Requests are routed to the correct channel (email, SMS, push).",
-      "The system tolerates temporary provider failures.",
-      "Duplicate notifications are handled reasonably.",
+      "Accept a recipient, message, and channel without waiting for provider delivery.",
+      "Preserve accepted work through a temporary provider interruption.",
+      "Distinguish client retries from new notification requests.",
     ],
     loadAssumption:
       "About 1 million notification requests per day, with short peaks around 200 requests per second.",
     constraints: [
-      "Accept requests quickly; delivery is asynchronous from acceptance.",
-      "Providers may fail temporarily, and duplicate requests are possible.",
-      "User channel preferences and opt-outs exist. Exactly-once third-party delivery is not guaranteed.",
+      "Email and SMS delivery providers are supplied building blocks.",
+      "Assume preference lookup already exists; preferences and identity do not need to be designed.",
+      "Explain delivery and duplicate-effect guarantees without promising exactly-once third-party delivery.",
     ],
     clarificationAnswers: {
       scale:
-        "Assume about 1 million notification requests per day, and state your own peak and latency assumptions.",
+        "Assume 1 million requests per day and peaks near 200 requests per second; detailed capacity arithmetic is not required.",
       reliability:
-        "Providers may fail temporarily. Delivery is best-effort; true exactly-once third-party delivery is not guaranteed.",
+        "Accepted work must survive a temporary provider outage. State the limits of duplicate suppression and third-party delivery guarantees.",
       preferences:
-        "User channel preferences and opt-outs can be assumed to exist.",
-      unlisted: UNLISTED_CLARIFICATION,
+        "Assume an existing service supplies channel preferences and opt-outs; its implementation is out of scope.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Separates request acceptance from delivery with an asynchronous buffer.",
-      "Routes notifications per channel and provider.",
-      "Handles provider failures without losing pending work.",
-      "Reasons about duplicate suppression and delivery guarantees.",
-      "Explains scaling of workers and queues under load.",
+      "Explains the durable acceptance boundary and asynchronous delivery flow.",
+      "Explains retry identity and the limits of duplicate suppression.",
+      "Explains bounded recovery of accepted work after provider interruption.",
     ],
     challenge: {
       id: "sms-provider-outage",
       prompt:
-        "The SMS provider is down for 30 minutes during peak traffic. What happens to accepted SMS requests, and how would your design recover without a burst of duplicates?",
+        "The SMS provider is unavailable for 30 minutes. How does your design recover accepted SMS work without overwhelming the provider when it returns?",
       targetConcepts: ["retry", "backoff", "dead-letter", "idempotency"],
     },
+    outOfScope: [
+      "Push-specific infrastructure",
+      "Preference management and campaigns",
+      "Scheduling and quiet hours",
+      "Delivery analytics",
+      "A separate worker-scaling deep dive",
+    ],
   },
   {
     id: "url-shortener",
@@ -59,37 +57,43 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a URL Shortener",
     difficulty: "MEDIUM",
     brief:
-      "Design a service that maps long URLs to short links and redirects users quickly.",
+      "Design a service that creates immutable short links and redirects correctly under read-heavy traffic. Focus on mapping ownership, concurrent code generation, and a hot link.",
     visibleRequirements: [
-      "Creating a short link is fast and returns a unique code.",
-      "Redirects are low latency and highly available.",
-      "The system scales reads far beyond writes.",
+      "Create a short code that identifies one immutable URL mapping.",
+      "Resolve a short code to the correct destination with low redirect latency.",
+      "Keep a hot link from overwhelming the authoritative mapping store.",
     ],
     loadAssumption:
       "About 10 million new links per day and roughly 1 billion redirects per day (100:1 reads to writes).",
     constraints: [
-      "Redirects should be low latency and highly available.",
-      "Links may optionally expire; assume a reasonable default.",
-      "Creation must return a unique code and stay fast.",
+      "A successfully created code must not overwrite an existing mapping.",
+      "Use the supplied read/write assumptions; detailed capacity arithmetic is not required.",
+      "Choose any defensible storage and lookup mechanism; no particular product is required.",
     ],
     clarificationAnswers: {
       readWrite:
-        "Assume reads dominate writes by roughly 100:1; state your own assumptions.",
-      expiry: "Links may optionally expire; assume a reasonable default.",
-      unlisted: UNLISTED_CLARIFICATION,
+        "Assume roughly 100 redirects per new link; state a reasonable redirect latency target.",
+      expiry:
+        "Expiry and custom aliases are outside this round; mappings remain immutable.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Chooses a key generation strategy and explains collisions.",
-      "Separates the write path from the read/redirect path.",
-      "Adds caching for hot links.",
-      "Reasons about database choice and durability.",
+      "Explains where authoritative mappings are created and resolved.",
+      "Explains collision handling under concurrent creation without overwriting links.",
+      "Explains how the hot-link read path protects the mapping store.",
     ],
     challenge: {
       id: "hot-link-spike",
       prompt:
-        "One short link suddenly receives a very large share of all traffic. Explain how your design handles the spike.",
+        "One short link receives most redirect traffic. How does your design absorb that load without overwhelming the mapping store?",
       targetConcepts: ["cache", "rate-limiting", "scaling"],
     },
+    outOfScope: [
+      "Custom aliases and link expiry",
+      "Analytics and abuse detection",
+      "Multi-region writes",
+      "Detailed storage sizing",
+    ],
   },
   {
     id: "rate-limiter",
@@ -97,37 +101,46 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a Rate Limiter",
     difficulty: "MEDIUM",
     brief:
-      "Design a rate limiter that enforces per-client request limits across a fleet of servers.",
+      "Design a distributed limiter for one API-key quota. Focus on fast admission decisions, bounded concurrent over-admission, and a justified degraded-mode policy.",
     visibleRequirements: [
-      "Limits are enforced consistently across servers.",
-      "The limiter does not become a single point of failure.",
-      "Limiting decisions are fast on the request path.",
+      "Admit or reject requests for one quota keyed by API key.",
+      "Coordinate decisions across servers within a stated small race tolerance.",
+      "Define an explicit policy when shared limiter state is unavailable.",
     ],
     loadAssumption:
       "Up to about 100,000 requests per second across the fleet, with limits tracked per client API key.",
     constraints: [
-      "Any standard algorithm is acceptable if its trade-offs are explained.",
-      "Slight over-admission under races is acceptable; state your tolerance.",
-      "A limiter-store outage must not block all API traffic.",
+      "Any defensible limiting algorithm is acceptable; explain its tradeoffs.",
+      "Small over-admission is acceptable within the tolerance you state.",
+      "Balance API availability against overload protection rather than assuming unconditional fail-open.",
     ],
     clarificationAnswers: {
       algorithm:
-        "Any standard algorithm is acceptable; state the trade-offs you chose.",
+        "Choose one defensible algorithm and explain its admission behavior; comparing every algorithm is out of scope.",
       consistency:
-        "Slight over-admission under races is acceptable; state your tolerance.",
-      unlisted: UNLISTED_CLARIFICATION,
+        "State a small acceptable over-admission tolerance and explain how concurrent checks stay within it.",
+      outage:
+        "Choose and justify a degraded-mode policy that balances continued service with overload protection.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Uses atomic operations or a shared counter store.",
-      "Explains distributed coordination and clock concerns.",
-      "Handles the store being unavailable without blocking all traffic.",
+      "Explains the state and decision mechanism of one limiting algorithm.",
+      "Explains concurrent admissions within the stated tolerance.",
+      "Justifies bounded behavior when shared limiter state becomes unavailable.",
     ],
     challenge: {
       id: "store-outage",
       prompt:
-        "The shared counter store becomes unavailable. Explain what your limiter does and how you keep the API serving.",
+        "The limiter's shared state becomes unavailable. What policy does your design apply to balance continued API availability against overload protection?",
       targetConcepts: ["fail-open", "caching", "degradation"],
     },
+    outOfScope: [
+      "Multiple quota tiers",
+      "Rule-distribution control planes",
+      "Multi-region coordination",
+      "Every algorithm comparison",
+      "Implementation pseudocode",
+    ],
   },
   {
     id: "chat-application",
@@ -135,36 +148,46 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a Chat Application",
     difficulty: "HARD",
     brief:
-      "Design a real-time chat service supporting one-to-one and group conversations.",
+      "Design single-region one-to-one text messaging with near-real-time online delivery, durable offline retrieval, and ordering within each conversation.",
     visibleRequirements: [
-      "Messages are delivered in near real time.",
-      "Message ordering is consistent per conversation.",
-      "The system supports presence and offline delivery.",
+      "Deliver one-to-one text messages promptly when both users are online.",
+      "Retain messages for recipients who are offline.",
+      "Preserve a consistent order within each conversation.",
     ],
     loadAssumption:
       "Millions of concurrent connections, with a typical user active in a handful of conversations.",
     constraints: [
-      "Per-conversation ordering is required; global ordering is not.",
-      "Messages must be durable enough for offline delivery.",
-      "Presence can be approximate and may lag.",
+      "Global ordering is not required.",
+      "Define what a sender confirmation guarantees before the recipient is online.",
+      "Equivalent connection, storage, and ordering mechanisms are acceptable.",
     ],
     clarificationAnswers: {
       scale:
-        "Assume millions of concurrent connections; state your assumptions.",
-      ordering: "Per-conversation ordering is required; global ordering is not.",
-      unlisted: UNLISTED_CLARIFICATION,
+        "Use the supplied connection-scale assumption for one region; detailed fleet sizing is not required.",
+      ordering:
+        "Ordering is required within one conversation, not across all conversations.",
+      presence:
+        "Presence, group chat, and read receipts are outside this round.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Uses persistent connections and a fan-out strategy.",
-      "Stores messages durably and preserves per-conversation order.",
-      "Handles presence and offline delivery queues.",
+      "Explains online delivery and durable offline retrieval.",
+      "Explains a per-conversation ordering authority or equivalent mechanism.",
+      "Explains reconnection and recovery of messages after connection-server loss.",
     ],
     challenge: {
       id: "connection-server-loss",
       prompt:
-        "A connection server holding a large number of clients crashes. Explain what happens to those clients and the messages in flight.",
+        "A connection server crashes with messages in flight. How do affected clients reconnect and recover missing messages without displaying duplicates?",
       targetConcepts: ["reconnect", "durability", "fan-out"],
     },
+    outOfScope: [
+      "Group fan-out and presence",
+      "Media and read receipts",
+      "Encryption architecture",
+      "Multi-device synchronization",
+      "Cross-region routing",
+    ],
   },
   {
     id: "file-storage",
@@ -172,35 +195,44 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a File Storage Service",
     difficulty: "MEDIUM",
     brief:
-      "Design a service where users upload, store, and download files.",
+      "Design large private file upload and owner-authorized download. Support interrupted-upload resumption and expose only completed uploads.",
     visibleRequirements: [
-      "Large uploads and downloads are efficient.",
-      "File metadata is queryable.",
-      "Storage scales independently of metadata.",
+      "Upload large private files and let their owners download them.",
+      "Resume an interrupted transfer without restarting completed work.",
+      "Keep incomplete uploads from appearing as downloadable files.",
     ],
     loadAssumption:
       "Files up to multiple gigabytes, with storage growing to millions of objects.",
     constraints: [
-      "Large transfers should be efficient and resumable where practical.",
-      "Files are private by default and shared through explicit access.",
-      "Metadata and object storage must stay consistent enough to detect failed uploads.",
+      "Owner-only authorization is sufficient; rich sharing permissions are out of scope.",
+      "Treat blob storage as a supplied building block.",
+      "Define how metadata and stored bytes reach a completed, visible state.",
     ],
     clarificationAnswers: {
-      size: "Assume files up to multiple gigabytes; state your assumptions.",
-      access: "Files are private by default and shared via explicit access.",
-      unlisted: UNLISTED_CLARIFICATION,
+      size: "Assume multi-gigabyte files and millions of stored objects; detailed storage sizing is not required.",
+      access:
+        "Only the owner needs access in this round; assume identity is already available.",
+      sharing:
+        "Rich sharing permissions, synchronization, and folder models are outside this round.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Separates object storage from metadata storage.",
-      "Handles large uploads with chunking or pre-signed URLs.",
-      "Reasons about consistency between metadata and stored objects.",
+      "Explains the byte-transfer path separately from metadata and authorization.",
+      "Explains how persistent upload progress allows safe resumption.",
+      "Explains completion visibility and cleanup of incomplete uploads.",
     ],
     challenge: {
       id: "metadata-object-mismatch",
       prompt:
-        "A metadata write succeeds but the object upload fails. Explain how your design detects and repairs this.",
+        "Metadata exists but the upload never completes. How does your design prevent a broken download and eventually clean up the incomplete upload?",
       targetConcepts: ["consistency", "reconciliation", "idempotency"],
     },
+    outOfScope: [
+      "Folder models and rich sharing permissions",
+      "Cross-device synchronization and collaboration",
+      "Content deduplication",
+      "Blob-store internals",
+    ],
   },
   {
     id: "job-queue",
@@ -208,36 +240,44 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a Job Queue System",
     difficulty: "HARD",
     brief:
-      "Design a distributed job queue that schedules work, retries failures, and supports delayed jobs.",
+      "Design a background job queue with durable acceptance, at-least-once execution, bounded retries, and isolation of permanently failing work.",
     visibleRequirements: [
-      "Jobs are processed at least once with retries.",
-      "Failed jobs are moved to a dead-letter path.",
-      "Workers can crash without losing jobs.",
+      "Accept jobs durably and let workers claim them for execution.",
+      "Recover unfinished work after worker loss with at-least-once execution.",
+      "Bound retries and isolate work that repeatedly fails.",
     ],
     loadAssumption:
-      "About 10,000 jobs per second at peak, with immediate, delayed, and retried work.",
+      "About 10,000 immediately eligible jobs per second at peak, including retried work.",
     constraints: [
-      "At-least-once delivery is acceptable; duplicate execution must be considered.",
-      "Per-key ordering is required only where requested.",
-      "A poison job must be isolated without blocking unrelated work.",
+      "Duplicate execution is possible; explain how unwanted repeated effects are controlled.",
+      "Immediate jobs are sufficient; cron, delayed scheduling, and per-key ordering are out of scope.",
+      "A poison job must not prevent unrelated work from progressing.",
     ],
     clarificationAnswers: {
-      ordering:
-        "Assume per-key ordering where requested, otherwise best-effort.",
-      duplicates: "At-least-once delivery is acceptable; state your assumptions.",
-      unlisted: UNLISTED_CLARIFICATION,
+      ordering: "No per-key ordering is required in this round.",
+      duplicates:
+        "At-least-once execution is acceptable; explain how application side effects tolerate redelivery.",
+      scheduling:
+        "Immediate jobs are sufficient; recurring schedules, delayed execution precision, and priorities are out of scope.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Uses leases or visibility timeouts for job ownership.",
-      "Implements retry with backoff and a dead-letter queue.",
-      "Reasons about worker failure and recovery.",
+      "Explains durable acceptance and worker ownership of claimed work.",
+      "Distinguishes delivery from application side effects after redelivery.",
+      "Explains bounded retries and isolation of permanently failing jobs.",
     ],
     challenge: {
       id: "poison-message",
       prompt:
-        "One job repeatedly fails and blocks a queue. Explain how your design isolates it and keeps other work flowing.",
+        "One job keeps failing. How does your design stop its retries from delaying unrelated jobs?",
       targetConcepts: ["dead-letter", "isolation", "backoff"],
     },
+    outOfScope: [
+      "Cron and delayed execution precision",
+      "Job dependencies and priorities",
+      "Per-key ordering",
+      "Tenant fairness",
+    ],
   },
   {
     id: "news-feed",
@@ -245,36 +285,45 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a News Feed",
     difficulty: "HARD",
     brief:
-      "Design a social news feed that shows recent posts from accounts a user follows.",
+      "Design text-post publication and a reverse-chronological feed from followed accounts. Choose a feed-assembly strategy and explain how it handles a high-follower author.",
     visibleRequirements: [
-      "Feed reads are fast for active users.",
-      "New posts appear with acceptable freshness.",
-      "The system supports both fan-out on write and read trade-offs.",
+      "Publish text posts for existing users and follow relationships.",
+      "Return recent posts from followed accounts in reverse chronological order.",
+      "Keep feed reads responsive while permitting a stated short publication lag.",
     ],
     loadAssumption:
       "About 100 million daily active users, with a few accounts having tens of millions of followers.",
     constraints: [
-      "A reverse-chronological feed is acceptable; ranking is optional.",
-      "Feed reads should stay fast for active users.",
-      "High-follower accounts must not create write-amplification storms.",
+      "Choose a fan-out strategy; implementing both read-time and write-time fan-out is not required.",
+      "Assume identity and follow relationships already exist.",
+      "Include a high-follower outlier and state an acceptable freshness bound.",
     ],
     clarificationAnswers: {
       scale:
-        "Assume a mix of normal users and a few very high-follower accounts; state your assumptions.",
-      ranking: "Reverse-chronological is acceptable; ranking is optional.",
-      unlisted: UNLISTED_CLARIFICATION,
+        "Use the supplied user-scale assumption and include one very high-follower author; detailed capacity arithmetic is not required.",
+      ranking:
+        "Use reverse chronology; ranking and recommendations are out of scope.",
+      freshness:
+        "A short publication lag is acceptable; state a bound and explain what controls it.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Chooses a fan-out strategy and explains its trade-offs.",
-      "Uses caching and pagination for feed reads.",
-      "Handles high-follower accounts without write amplification storms.",
+      "Explains post publication and feed assembly under the chosen strategy.",
+      "Explains the publishing-versus-reading work and freshness tradeoff.",
+      "Explains how a high-follower publication avoids overwhelming feed requests.",
     ],
     challenge: {
       id: "celebrity-post",
       prompt:
-        "An account with tens of millions of followers posts. Explain how your feed design avoids overwhelming the system.",
+        "An account with ten million followers posts. How would your design keep feed requests responsive while handling that publication?",
       targetConcepts: ["fan-out", "hybrid", "caching"],
     },
+    outOfScope: [
+      "Ranking and recommendation models",
+      "Media processing, reactions, and comments",
+      "Detailed authorization",
+      "Advanced pagination guarantees unless already introduced",
+    ],
   },
   {
     id: "ride-hailing",
@@ -282,37 +331,45 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a Ride-Hailing System",
     difficulty: "HARD",
     brief:
-      "Design a system that matches riders with nearby drivers in real time.",
+      "Design ride matching in one city. Drivers publish locations, riders request nearby available drivers, and a driver accepts or declines an offer.",
     visibleRequirements: [
-      "Driver locations are tracked with low latency.",
-      "Riders are matched to suitable nearby drivers.",
-      "The system handles supply and demand imbalance.",
+      "Use periodically reported driver locations to find nearby available drivers.",
+      "Offer a requested ride and confirm an accepted match.",
+      "Allow at most one active confirmed assignment per rider and per driver.",
     ],
     loadAssumption:
       "About 100,000 active drivers sending location updates every few seconds during peak.",
     constraints: [
-      "Location updates are frequent and can be slightly stale.",
-      "Matching quality can be approximate; state an acceptable latency.",
-      "A rider must not be assigned two drivers at once.",
+      "Location reports arrive every few seconds and can be slightly stale.",
+      "Approximate nearby search is acceptable; state an acceptable matching delay.",
+      "Choose any defensible search and coordination mechanism; no particular geospatial product is required.",
     ],
     clarificationAnswers: {
       location:
-        "Assume location updates arrive every few seconds; state your assumptions.",
+        "Assume updates every few seconds in one city; explain how much staleness your lookup tolerates.",
       matching:
-        "Matching quality can be approximate; state your acceptable latency.",
-      unlisted: UNLISTED_CLARIFICATION,
+        "Approximate nearby matching is sufficient; optimal fleet-wide matching is out of scope.",
+      assignment:
+        "At most one active confirmed assignment is allowed per rider and per driver.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Uses a geospatial index for nearby search.",
-      "Separates location ingestion from matching.",
-      "Reasons about consistency during matching races.",
+      "Explains the request, offer, and confirmed-assignment lifecycle.",
+      "Explains efficient nearby lookup under slightly stale location reports.",
+      "Explains the authoritative decision that prevents conflicting active assignments.",
     ],
     challenge: {
       id: "two-drivers-one-rider",
       prompt:
-        "Two drivers are matched to the same rider at once. Explain how your design prevents or resolves the conflict.",
+        "Two drivers accept offers for the same rider almost simultaneously. Where does your design decide which assignment succeeds?",
       targetConcepts: ["locking", "consistency", "idempotency"],
     },
+    outOfScope: [
+      "Pricing and payments",
+      "Route optimization and ratings",
+      "Scheduled rides",
+      "Optimal fleet-wide matching",
+    ],
   },
   {
     id: "video-streaming",
@@ -320,35 +377,45 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a Video Streaming Platform",
     difficulty: "HARD",
     brief:
-      "Design a platform where users upload videos and viewers stream them.",
+      "Design video upload, asynchronous processing, and playback of a usable output. Preserve original uploads and expose processing status.",
     visibleRequirements: [
-      "Uploads are stored durably.",
-      "Videos are transcoded into multiple renditions.",
-      "Playback is fast and reliable globally.",
+      "Accept and preserve the original uploaded video durably.",
+      "Process uploads asynchronously and expose processing status.",
+      "Publish a usable output for playback only when it is ready.",
     ],
     loadAssumption:
-      "Multi-gigabyte uploads, global viewers, and a small set of very popular videos.",
+      "Multi-gigabyte uploads and a mix of ordinary and popular videos; detailed global delivery infrastructure is outside this round.",
     constraints: [
-      "Adaptive bitrate playback is expected.",
-      "Transcoding is asynchronous and may lag under load.",
-      "Uploads must remain durable even when processing fails.",
+      "Storage, encoding, and delivery services can be supplied building blocks.",
+      "The original upload must remain durable if processing is delayed or fails.",
+      "Detailed codecs, adaptive-bitrate manifests, and global CDN topology are not required.",
     ],
     clarificationAnswers: {
-      scale: "Assume large files and global viewers; state your assumptions.",
-      quality: "Adaptive bitrate playback is expected.",
-      unlisted: UNLISTED_CLARIFICATION,
+      scale:
+        "Assume large uploads and a mix of ordinary and popular videos; detailed capacity arithmetic is not required.",
+      quality:
+        "One usable playback output is sufficient; multiple renditions and adaptive-bitrate details are optional depth.",
+      processing:
+        "Uploads and playback should remain usable while new processing work accumulates.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Separates ingestion, transcoding, and delivery.",
-      "Uses object storage and a CDN.",
-      "Reasons about async processing and status tracking.",
+      "Explains the separation between durable upload, asynchronous processing, and playback.",
+      "Explains the authoritative transition to a playable output.",
+      "Explains backlog control without losing originals or disrupting existing playback.",
     ],
     challenge: {
       id: "transcode-backlog",
       prompt:
-        "Transcoding falls far behind uploads during a spike. Explain how your design keeps the platform healthy.",
+        "Uploads arrive faster than videos can be processed. How does your design control the backlog without disrupting existing playback?",
       targetConcepts: ["backpressure", "prioritization", "scaling"],
     },
+    outOfScope: [
+      "Codec internals and adaptive-bitrate manifest details",
+      "Live video, recommendations, search, and moderation",
+      "Detailed CDN topology",
+      "Resumable-upload protocols",
+    ],
   },
   {
     id: "ticket-booking",
@@ -356,38 +423,53 @@ export const PROBLEMS: ProblemConfig[] = [
     title: "Design a Ticket Booking System",
     difficulty: "HARD",
     brief:
-      "Design a system that lets users reserve seats for a popular event without overselling.",
+      "Design booking for one known event with a fixed seat inventory, expiring holds, and confirmation using an external payment result. Never confirm a seat twice.",
     visibleRequirements: [
-      "Seats are never double-booked.",
-      "Reservations are held temporarily before payment.",
-      "The system stays responsive under contention.",
+      "Create a temporary hold for a selected seat in one event.",
+      "Confirm a booking using an external payment result before the hold expires.",
+      "Never confirm the same seat for more than one booking.",
     ],
     loadAssumption:
       "Tens of thousands of users competing for a few thousand seats when a popular event opens.",
     constraints: [
-      "Seats must never be double-booked.",
-      "Temporary holds expire after a reasonable duration.",
-      "The system must protect inventory and remain responsive during a flash sale.",
+      "Choose and state a reasonable hold duration.",
+      "Treat payment as an external result; payment-provider internals are out of scope.",
+      "Protect authoritative inventory and keep reservation requests responsive during contention.",
     ],
     clarificationAnswers: {
       contention:
-        "Assume a small number of very popular events; state your assumptions.",
-      holds: "Temporary holds may expire; assume a reasonable hold duration.",
-      unlisted: UNLISTED_CLARIFICATION,
+        "Assume one popular event with the supplied burst and inventory sizes; detailed traffic sizing is not required.",
+      holds:
+        "Choose a reasonable expiration time and explain how a hold becomes confirmed or expires.",
+      payment:
+        "Assume a payment provider supplies a confirmation result; refunds and provider internals are out of scope.",
+      unlisted: "Make a reasonable assumption, state it, and continue.",
     },
     evaluationGoals: [
-      "Prevents overselling with transactional or atomic reservation.",
-      "Uses time-bound holds with expiry.",
-      "Reasons about contention and fairness under load.",
+      "Explains the hold, confirmation, and expiry lifecycle.",
+      "Explains authoritative concurrency control that prevents overselling.",
+      "Explains protection of reservation throughput and inventory during a flash sale.",
     ],
     challenge: {
       id: "flash-sale",
       prompt:
-        "Tickets for a popular event go on sale and traffic spikes instantly. Explain how your design protects inventory and stays responsive.",
+        "A popular event opens and traffic spikes immediately. How does your design protect inventory while keeping reservation requests responsive?",
       targetConcepts: ["locking", "queueing", "hold-expiry"],
     },
+    outOfScope: [
+      "Event discovery and search",
+      "Dynamic pricing and refunds",
+      "Multi-seat atomicity",
+      "Sophisticated waiting-room fairness",
+      "Detailed payment compensation",
+    ],
   },
 ];
+
+export const PROBLEMS: ProblemConfig[] = CATALOG.map((problem) => ({
+  ...problem,
+  questionBank: QUESTION_BANKS[problem.id],
+}));
 
 const byId = new Map(PROBLEMS.map((p) => [p.id, p]));
 
@@ -406,6 +488,7 @@ export function problemSummaries(): ProblemSummary[] {
       visibleRequirements,
       loadAssumption,
       constraints,
+      outOfScope,
     }) => ({
       id,
       version,
@@ -415,6 +498,7 @@ export function problemSummaries(): ProblemSummary[] {
       visibleRequirements,
       loadAssumption,
       constraints,
+      outOfScope,
     }),
   );
 }
@@ -430,6 +514,7 @@ export function problemSummary(id: string): ProblemSummary | null {
     visibleRequirements,
     loadAssumption,
     constraints,
+    outOfScope,
   } = problem;
   return {
     id,
@@ -440,5 +525,6 @@ export function problemSummary(id: string): ProblemSummary | null {
     visibleRequirements,
     loadAssumption,
     constraints,
+    outOfScope,
   };
 }

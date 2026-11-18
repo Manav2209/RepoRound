@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import StartInterview from "../../components/StartInterview";
 
 export const metadata: Metadata = {
@@ -10,15 +9,12 @@ export const metadata: Metadata = {
 export default function PracticePage() {
   return (
     <main className="practice-page">
-      <Link className="back-link" href="/">
-        ← Back to home
-      </Link>
       <div className="practice-heading">
-        <p className="eyebrow">New practice round</p>
-        <h1>What do you want to work through?</h1>
+        <p className="eyebrow">Your next practice round</p>
+        <h1>Build confidence. One interview at a time.</h1>
         <p className="subtitle">
-          Choose a context and we will build the interview around it. Have your
-          microphone ready when the room opens.
+          Bring your own code or take on a system design challenge. Pick a focus
+          and talk through the decisions that matter.
         </p>
       </div>
       <section className="start-card">

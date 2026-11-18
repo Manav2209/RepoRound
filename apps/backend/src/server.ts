@@ -19,6 +19,7 @@ import {
   interviewOwnership,
 } from "./api/session.js";
 import { createAuth } from "./auth/index.js";
+import { createMetricsRouter } from "./api/metrics.js";
 import { clientIp } from "./api/client-ip.js";
 import { JobWorker } from "./jobs/queue.js";
 import { Queue } from "bullmq";
@@ -54,6 +55,7 @@ const llm = new LlmClient(config);
 const interviewService = new InterviewService(
   llm,
   config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
+  config.REPOSITORY_CONTEXT_MODE,
 );
 const sessionService = new SessionService(config);
 const evaluationService = new EvaluationService(llm);
@@ -62,6 +64,7 @@ const orchestrator = new InterviewOrchestrator(
   llm,
   config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES,
   config.GITHUB_INTERVIEW_DURATION_MINUTES,
+  config.REPOSITORY_CONTEXT_MODE,
 );
 
 const worker = new JobWorker({
@@ -175,6 +178,8 @@ app.use("/api/v1/interviews/:id", browserSessionMiddleware(auth));
 app.use("/api/v1/interviews/:id/*", browserSessionMiddleware(auth));
 app.use("/api/v1/system-design", browserSessionMiddleware(auth));
 app.use("/api/v1/system-design/*", browserSessionMiddleware(auth));
+app.use("/api/v1/metrics", browserSessionMiddleware(auth));
+app.use("/api/v1/metrics/*", browserSessionMiddleware(auth));
 app.use("/api/v1/interviews", interviewOwnership());
 app.use("/api/v1/interviews/:id", interviewOwnership());
 app.use("/api/v1/interviews/:id/*", interviewOwnership());
@@ -187,7 +192,8 @@ app.route(
   "/api/v1/interviews",
   createSystemDesignInterviewRouter(orchestrator),
 );
-app.route("/api/v1/system-design", createSystemDesignCatalogRouter());
+app.route("/api/v1/system-design", createSystemDesignCatalogRouter(config.SYSTEM_DESIGN_INTERVIEW_DURATION_MINUTES));
+app.route("/api/v1/metrics", createMetricsRouter());
 app.route(
   "/internal",
   createInternalRouter(config, realtimeEvents, orchestrator, evaluationService),

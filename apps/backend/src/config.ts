@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES } from "./system-design/policy.js";
 
 const baseEnvSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
   PORT: z.coerce.number().int().positive().default(8080),
+  REPOSITORY_CONTEXT_MODE: z.enum(["current", "diverse"]).default("current"),
   DATABASE_URL: z.string().min(1),
   AI_ROUTER_BASE_URL: z.string().url(),
   AI_ROUTER_API_KEY: z.string().min(1),
@@ -35,8 +37,8 @@ const baseEnvSchema = z.object({
     .number()
     .int()
     .min(10)
-    .max(15)
-    .default(15),
+    .max(DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES)
+    .default(DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES),
   GITHUB_INTERVIEW_DURATION_MINUTES: z.coerce
     .number()
     .int()
