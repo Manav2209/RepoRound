@@ -8,6 +8,7 @@ import { getLogger } from "../logger.js";
 import { VoiceTelemetry, type VoiceMetric } from "./telemetry.js";
 
 export type DomainEvent =
+  | { type: "user.speaking"; sessionId: string }
   | { type: "session.started"; sessionId: string }
   | { type: "session.close"; sessionId: string; reason: string }
   | {
@@ -58,6 +59,9 @@ export class SessionManager {
   private agent: voice.Agent | null = null;
   private readonly onEvent: (ev: DomainEvent) => void;
   private fullText = "";
+  private speechConfirmationTimer?: ReturnType<typeof setTimeout>;
+  private userSpeechStartedAt?: number;
+  private userSpeechConfirmed = false;
 
   constructor({
     stt,
@@ -99,6 +103,26 @@ export class SessionManager {
     const emit = (ev: DomainEvent): void => this.onEvent(ev);
 
     this.session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
+      if (
+        this.userSpeechStartedAt !== undefined &&
+        !this.userSpeechConfirmed &&
+        ev.transcript.trim().split(/\s+/).length >= 2
+      ) {
+        clearTimeout(this.speechConfirmationTimer);
+        const start = this.userSpeechStartedAt;
+        this.speechConfirmationTimer = setTimeout(
+          () => {
+            if (
+              this.userSpeechStartedAt === start &&
+              !this.userSpeechConfirmed
+            ) {
+              this.userSpeechConfirmed = true;
+              emit({ type: "user.speaking", sessionId: this.sessionId });
+            }
+          },
+          Math.max(0, 400 - (performance.now() - start)),
+        );
+      }
       emit({
         type: "user_input_transcribed",
         transcript: ev.transcript,
@@ -176,6 +200,10 @@ export class SessionManager {
       },
     );
     this.session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
+      clearTimeout(this.speechConfirmationTimer);
+      this.userSpeechStartedAt =
+        ev.newState === "speaking" ? performance.now() : undefined;
+      this.userSpeechConfirmed = false;
       if (ev.newState === "speaking")
         this.telemetry.cancelTurn("worker_user_resumed_speech");
       if (ev.newState === "speaking" && this.session.agentState === "speaking")
@@ -208,6 +236,8 @@ export class SessionManager {
     );
 
     this.session.on(voice.AgentSessionEventTypes.Close, (ev) => {
+      clearTimeout(this.speechConfirmationTimer);
+      this.userSpeechStartedAt = undefined;
       this.telemetry.close();
       emit({
         type: "session.close",

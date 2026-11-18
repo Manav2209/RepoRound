@@ -1,0 +1,533 @@
+{
+  "measuredAt": "2026-11-18T12:24:48.673Z",
+  "methodology": "One scripted Windows speech-synthesis WAV published in real time to a live LiveKit room. Real STT, configured backend model, TTS and worker. Client first audio uses received PCM RMS >100 after candidate AudioSource playout ends; it is not browser-audible timing or a human interview. Opening wait includes the intentional delay, which retained startup metrics adjust separately. Fixture account is deleted afterward. Small smoke test, not a percentile/SLO or semantic-quality benchmark.",
+  "firstReceivedAudioMs": 6082.693299999999,
+  "agentSpeakingStateMs": 5935.673200000005,
+  "metrics": {
+    "lifecycle": {
+      "recordedRounds": 1,
+      "startedRounds": 1,
+      "completedRounds": 1,
+      "completionRate": 1,
+      "denominator": "recorded rounds with an allocated voice session; unfinished rounds remain in the denominator"
+    },
+    "latency": {
+      "memory.selection": {
+        "count": 2,
+        "meanMs": 0,
+        "p50Ms": 0,
+        "p95Ms": 0,
+        "maxMs": 0,
+        "observed": 2,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.backend_attempt": {
+        "count": 2,
+        "meanMs": 4871.232850000001,
+        "p50Ms": 4125.938000000002,
+        "p95Ms": 5616.527700000001,
+        "maxMs": 5616.527700000001,
+        "observed": 2,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.startup": {
+        "count": 1,
+        "meanMs": 18466.1193,
+        "p50Ms": 18466.1193,
+        "p95Ms": 18466.1193,
+        "maxMs": 18466.1193,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.startup_adjusted": {
+        "count": 1,
+        "meanMs": 8464.0855,
+        "p50Ms": 8464.0855,
+        "p95Ms": 8464.0855,
+        "maxMs": 8464.0855,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.tts": {
+        "count": 2,
+        "meanMs": 5086.5,
+        "p50Ms": 3259,
+        "p95Ms": 6914,
+        "maxMs": 6914,
+        "observed": 2,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.tts_first_audio": {
+        "count": 2,
+        "meanMs": 396,
+        "p50Ms": 394,
+        "p95Ms": 398,
+        "maxMs": 398,
+        "observed": 2,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.stt": {
+        "count": 0,
+        "meanMs": null,
+        "p50Ms": null,
+        "p95Ms": null,
+        "maxMs": null,
+        "observed": 4,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.end_of_utterance": {
+        "count": 1,
+        "meanMs": 1001,
+        "p50Ms": 1001,
+        "p95Ms": 1001,
+        "maxMs": 1001,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.node_entry": {
+        "count": 1,
+        "meanMs": 11.96190000000206,
+        "p50Ms": 11.96190000000206,
+        "p95Ms": 11.96190000000206,
+        "maxMs": 11.96190000000206,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "llm.repository_turn_plan": {
+        "count": 1,
+        "meanMs": 4111.790399999998,
+        "p50Ms": 4111.790399999998,
+        "p95Ms": 4111.790399999998,
+        "maxMs": 4111.790399999998,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "repository_turn_plan": {
+        "count": 1,
+        "meanMs": 4114,
+        "p50Ms": 4114,
+        "p95Ms": 4114,
+        "maxMs": 4114,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "candidate_turn": {
+        "count": 1,
+        "meanMs": 4123,
+        "p50Ms": 4123,
+        "p95Ms": 4123,
+        "maxMs": 4123,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.backend_roundtrip": {
+        "count": 1,
+        "meanMs": 4127.108800000002,
+        "p50Ms": 4127.108800000002,
+        "p95Ms": 4127.108800000002,
+        "maxMs": 4127.108800000002,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.text_handoff": {
+        "count": 1,
+        "meanMs": 0.8557999999902677,
+        "p50Ms": 0.8557999999902677,
+        "p95Ms": 0.8557999999902677,
+        "maxMs": 0.8557999999902677,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.response_render_start": {
+        "count": 1,
+        "meanMs": 1303.803499999995,
+        "p50Ms": 1303.803499999995,
+        "p95Ms": 1303.803499999995,
+        "maxMs": 1303.803499999995,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.response_start": {
+        "count": 1,
+        "meanMs": 5446.143700000001,
+        "p50Ms": 5446.143700000001,
+        "p95Ms": 5446.143700000001,
+        "maxMs": 5446.143700000001,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.disconnect": {
+        "count": 1,
+        "meanMs": 0,
+        "p50Ms": 0,
+        "p95Ms": 0,
+        "maxMs": 0,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "voice.worker_closed": {
+        "count": 1,
+        "meanMs": 0,
+        "p50Ms": 0,
+        "p95Ms": 0,
+        "maxMs": 0,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "llm.evaluation": {
+        "count": 1,
+        "meanMs": 4716.962,
+        "p50Ms": 4716.962,
+        "p95Ms": 4716.962,
+        "maxMs": 4716.962,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "evaluation": {
+        "count": 1,
+        "meanMs": 4913,
+        "p50Ms": 4913,
+        "p95Ms": 4913,
+        "maxMs": 4913,
+        "observed": 1,
+        "failed": 0,
+        "cancelled": 0
+      }
+    },
+    "usage": {
+      "modelRequests": 2,
+      "failedModelRequests": 0,
+      "requestsWithReportedTokens": 2,
+      "inputTokens": 3186,
+      "outputTokens": 823,
+      "cachedInputTokens": 0,
+      "sttAudioSeconds": 16.299999999999997,
+      "ttsAudioSeconds": 21.16,
+      "ttsCharacters": 295,
+      "sttRequests": 1,
+      "ttsRequests": 2,
+      "sttRequestCountComplete": true,
+      "ttsRequestCountComplete": true
+    },
+    "cost": {
+      "knownEstimatedUsd": null,
+      "complete": false,
+      "estimateOnly": true,
+      "note": "Requires configured provider rates and complete billable usage. Not an invoice; cached-token pricing, failed requests and provider-specific billing may differ."
+    },
+    "quality": {
+      "sourceReferenceCoverage": 1,
+      "eligibleRepositoryQuestions": 2,
+      "questionsWithValidReferences": 2,
+      "note": "Valid pinned source references are a coverage proxy, not human-rated relevance or factual correctness."
+    },
+    "controls": {
+      "repeatRequestsHandled": 0,
+      "disconnectEvents": 1,
+      "reconnectEvents": 0,
+      "voiceErrorEvents": 0,
+      "retriesObserved": 0,
+      "recoverySuccessRate": null,
+      "note": "Reconnects are observed presence transitions, not proven state recovery. Recovery success requires a controlled test denominator; disconnect counts alone do not establish it."
+    },
+    "coverage": {
+      "roundsWithSummaries": 1,
+      "roundsWithoutSummaries": 0,
+      "samples": 24,
+      "truncatedRounds": 0,
+      "roundsWithWorkerClosure": 1,
+      "firstAudioMeasurement": "voice.response_start is a worker engine-speaking proxy, not browser-audible latency"
+    }
+  },
+  "summary": {
+    "samples": [
+      {
+        "failed": false,
+        "metric": "memory.selection",
+        "cancelled": false,
+        "durationMs": 0
+      },
+      {
+        "failed": false,
+        "metric": "voice.backend_attempt",
+        "attempt": 1,
+        "cancelled": false,
+        "durationMs": 5616.527700000001,
+        "requestCount": 1,
+        "measurementKind": "worker_http_start_attempt"
+      },
+      {
+        "failed": false,
+        "metric": "voice.startup",
+        "speechId": "speech_63e1c439-2f3",
+        "cancelled": false,
+        "durationMs": 18466.1193,
+        "questionId": "q_tgsaak4a2p7z6ux7",
+        "measurementKind": "worker_entry_to_engine_speaking_proxy",
+        "adjustedDurationMs": 8464.0855,
+        "intentionalDelayMs": 10002.0338
+      },
+      {
+        "model": "aura-2-andromeda-en",
+        "failed": false,
+        "metric": "voice.tts",
+        "speechId": "speech_63e1c439-2f3",
+        "streamed": true,
+        "cancelled": false,
+        "requestId": "4b647c66-c08",
+        "durationMs": 6914,
+        "inputTokens": 0,
+        "audioSeconds": 14.64,
+        "firstAudioMs": 394,
+        "outputTokens": 0,
+        "requestCount": 1,
+        "modelProvider": "Deepgram",
+        "charactersCount": 204,
+        "measurementKind": "sdk_tts_synthesis"
+      },
+      {
+        "model": "nova-3",
+        "failed": false,
+        "metric": "voice.stt",
+        "streamed": true,
+        "cancelled": false,
+        "requestId": "01a1ee9c-d8a4-7545-9e0a-daab2064c7ed",
+        "inputTokens": 0,
+        "audioSeconds": 1.1,
+        "outputTokens": 0,
+        "requestCount": 1,
+        "modelProvider": "Deepgram",
+        "measurementKind": "sdk_streaming_stt_usage_not_latency"
+      },
+      {
+        "model": "nova-3",
+        "failed": false,
+        "metric": "voice.stt",
+        "streamed": true,
+        "cancelled": false,
+        "requestId": "01a1ee9c-d8a4-7545-9e0a-daab2064c7ed",
+        "inputTokens": 0,
+        "audioSeconds": 5,
+        "outputTokens": 0,
+        "requestCount": 0,
+        "modelProvider": "Deepgram",
+        "measurementKind": "sdk_streaming_stt_usage_not_latency"
+      },
+      {
+        "model": "nova-3",
+        "failed": false,
+        "metric": "voice.stt",
+        "streamed": true,
+        "cancelled": false,
+        "requestId": "01a1ee9c-d8a4-7545-9e0a-daab2064c7ed",
+        "inputTokens": 0,
+        "audioSeconds": 5.1,
+        "outputTokens": 0,
+        "requestCount": 0,
+        "modelProvider": "Deepgram",
+        "measurementKind": "sdk_streaming_stt_usage_not_latency"
+      },
+      {
+        "model": "nova-3",
+        "failed": false,
+        "metric": "voice.stt",
+        "streamed": true,
+        "cancelled": false,
+        "requestId": "01a1ee9c-d8a4-7545-9e0a-daab2064c7ed",
+        "inputTokens": 0,
+        "audioSeconds": 5.1,
+        "outputTokens": 0,
+        "requestCount": 0,
+        "modelProvider": "Deepgram",
+        "measurementKind": "sdk_streaming_stt_usage_not_latency"
+      },
+      {
+        "failed": false,
+        "metric": "voice.end_of_utterance",
+        "turnId": "item_e41c1e43-94c",
+        "speechId": "speech_4b6959b2-85f",
+        "cancelled": false,
+        "durationMs": 1001,
+        "questionId": "q_tgsaak4a2p7z6ux7",
+        "measurementKind": "sdk_vad_end_to_turn_finalization",
+        "transcriptionDelayMs": 892
+      },
+      {
+        "failed": false,
+        "metric": "voice.node_entry",
+        "turnId": "item_e41c1e43-94c",
+        "cancelled": false,
+        "durationMs": 11.96190000000206,
+        "measurementKind": "worker_commit_to_custom_llm_node"
+      },
+      {
+        "model": "openai/gpt-4o-mini-fast",
+        "failed": false,
+        "metric": "llm.repository_turn_plan",
+        "turnId": "item_e41c1e43-94c",
+        "cancelled": false,
+        "durationMs": 4111.790399999998,
+        "questionId": "q_tgsaak4a2p7z6ux7",
+        "inputTokens": 1093,
+        "outputTokens": 271,
+        "cachedInputTokens": 0
+      },
+      {
+        "failed": false,
+        "metric": "repository_turn_plan",
+        "cancelled": false,
+        "durationMs": 4114
+      },
+      {
+        "failed": false,
+        "metric": "memory.selection",
+        "turnId": "item_e41c1e43-94c",
+        "cancelled": false,
+        "durationMs": 0,
+        "questionId": "q_tgsaak4a2p7z6ux7"
+      },
+      {
+        "failed": false,
+        "metric": "candidate_turn",
+        "turnId": "item_e41c1e43-94c",
+        "cancelled": false,
+        "durationMs": 4123,
+        "questionId": "q_tgsaak4a2p7z6ux7"
+      },
+      {
+        "failed": false,
+        "metric": "voice.backend_attempt",
+        "turnId": "item_e41c1e43-94c",
+        "attempt": 1,
+        "cancelled": false,
+        "durationMs": 4125.938000000002,
+        "questionId": "q_tgsaak4a2p7z6ux7",
+        "requestCount": 1,
+        "measurementKind": "worker_http_turn_attempt"
+      },
+      {
+        "failed": false,
+        "metric": "voice.backend_roundtrip",
+        "turnId": "item_e41c1e43-94c",
+        "cancelled": false,
+        "durationMs": 4127.108800000002,
+        "questionId": "q_tgsaak4a2p7z6ux7",
+        "measurementKind": "worker_backend_turn_roundtrip_including_retries"
+      },
+      {
+        "failed": false,
+        "metric": "voice.text_handoff",
+        "turnId": "item_e41c1e43-94c",
+        "cancelled": false,
+        "durationMs": 0.8557999999902677,
+        "measurementKind": "worker_backend_ready_to_text_yield"
+      },
+      {
+        "failed": false,
+        "metric": "voice.response_render_start",
+        "turnId": "item_e41c1e43-94c",
+        "speechId": "speech_4b6959b2-85f",
+        "cancelled": false,
+        "durationMs": 1303.803499999995,
+        "questionId": "q_9nbh93yyx92y385e",
+        "measurementKind": "worker_backend_ready_to_engine_speaking_proxy"
+      },
+      {
+        "failed": false,
+        "metric": "voice.response_start",
+        "turnId": "item_e41c1e43-94c",
+        "speechId": "speech_4b6959b2-85f",
+        "cancelled": false,
+        "durationMs": 5446.143700000001,
+        "questionId": "q_9nbh93yyx92y385e",
+        "measurementKind": "worker_committed_turn_to_engine_speaking_proxy"
+      },
+      {
+        "model": "aura-2-andromeda-en",
+        "failed": false,
+        "metric": "voice.tts",
+        "turnId": "item_e41c1e43-94c",
+        "speechId": "speech_4b6959b2-85f",
+        "streamed": true,
+        "cancelled": false,
+        "requestId": "bbbc98b3-4db",
+        "durationMs": 3259,
+        "questionId": "q_9nbh93yyx92y385e",
+        "inputTokens": 0,
+        "audioSeconds": 6.52,
+        "firstAudioMs": 398,
+        "outputTokens": 0,
+        "requestCount": 1,
+        "modelProvider": "Deepgram",
+        "charactersCount": 91,
+        "measurementKind": "sdk_tts_synthesis"
+      },
+      {
+        "failed": false,
+        "metric": "voice.disconnect",
+        "cancelled": false,
+        "durationMs": 0,
+        "requestCount": 1,
+        "measurementKind": "worker_candidate_presence_heartbeat_proxy"
+      },
+      {
+        "failed": false,
+        "metric": "voice.worker_closed",
+        "cancelled": false,
+        "durationMs": 0,
+        "measurementKind": "worker_sdk_closed_and_prior_events_acknowledged"
+      },
+      {
+        "model": "openai/gpt-4o-mini-fast",
+        "failed": false,
+        "metric": "llm.evaluation",
+        "cancelled": false,
+        "durationMs": 4716.962,
+        "inputTokens": 2093,
+        "outputTokens": 552,
+        "cachedInputTokens": 0
+      },
+      {
+        "failed": false,
+        "metric": "evaluation",
+        "cancelled": false,
+        "durationMs": 4913
+      }
+    ],
+    "coverage": {
+      "truncated": false,
+      "eventsRead": 51
+    },
+    "schemaVersion": 1,
+    "reconnectEvents": 0,
+    "disconnectEvents": 1,
+    "sourceReferences": {
+      "eligibleQuestions": 2,
+      "questionsWithValidReferences": 2
+    },
+    "voiceErrorEvents": 0,
+    "repeatRequestsHandled": 0,
+    "workerClosureReceived": true
+  },
+  "reportVerified": true,
+  "rawCleanupVerified": true
+}

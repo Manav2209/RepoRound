@@ -55,3 +55,25 @@ test("backend errors preserve turn correlation for cancellation telemetry", asyn
   );
   expect(erroredTurn).toBe("turn-error");
 });
+
+test("a cancelled turn produces no apology speech or processing-error event", async () => {
+  const chat = llm.ChatContext.empty();
+  chat.addMessage({
+    id: "cancelled",
+    role: "user",
+    content: "Continuing an answer",
+  });
+  let errors = 0;
+  const agent = buildAgent({
+    instructions: "Use backend questions",
+    nextQuestion: async () => {
+      throw new DOMException("Superseded", "AbortError");
+    },
+    onResponseError: () => {
+      errors++;
+    },
+  });
+  const stream = await agent.llmNode(chat, llm.ToolContext.empty(), {});
+  expect(await stream!.getReader().read()).toMatchObject({ done: true });
+  expect(errors).toBe(0);
+});

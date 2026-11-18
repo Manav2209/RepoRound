@@ -129,6 +129,98 @@ export class RepositoryKnowledge {
       .map((s) => this.getFile(s.path, Math.max(1, s.line - 2), 40)!)
       .filter(Boolean);
   }
+  /** Bounded lexical windows around implementation, never an import-only prefix. */
+  decisionExcerpts(
+    query: string,
+    preferredPaths: string[] = [],
+    limit = 4,
+  ): CodeExcerpt[] {
+    const terms = new Set(
+      words(query).filter((word) => word.length > 2 && !commonTerms.has(word)),
+    );
+    const hits: { excerpt: CodeExcerpt; score: number }[] = [];
+    for (const file of this.files) {
+      if (
+        !/\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|prisma)$/i.test(
+          file.path,
+        ) ||
+        /(?:[._-](?:test|spec)|\.d)\.[^/]+$|(?:^|\/)(?:test|tests|fixtures|examples|node_modules)\/|(?:eslint|prettier|vite|next)\.config/i.test(
+          file.path,
+        )
+      )
+        continue;
+      const lines = file.content.split("\n");
+      const anchors = lines.flatMap((line, i) =>
+        !/^\s*(?:import\b|from\b|\/\/|\*)/.test(line) &&
+        /\b(?:function|class|def|func|fn|model)\b|(?:const|let)\s+\w+\s*=|\.(?:get|post|put|delete|on|subscribe|xAck|xReadGroup|insert)\s*\(|\b(?:publishEnvelope|validateNode|resolveSafePath|sanitizeSubprocessEnv)\s*\(/.test(
+          line,
+        )
+          ? [i]
+          : [],
+      );
+      if (!anchors.length)
+        anchors.push(
+          lines.findIndex((line) => /\b(?:await|return|throw)\b/.test(line)),
+        );
+      for (const anchor of anchors.filter((i) => i >= 0)) {
+        const excerpt = this.getFile(file.path, anchor + 1, 60);
+        if (
+          !excerpt ||
+          !/(?:=>|\b(?:await|return|throw|if|new|model|spawn|publish|write|insert|update)\b)/.test(
+            excerpt.content,
+          )
+        )
+          continue;
+        const score =
+          matches(terms, lines[anchor] ?? "") * 4 +
+          matches(terms, excerpt.content) * 2 +
+          matches(terms, file.path) +
+          (preferredPaths.includes(file.path) ? 10 : 0) +
+          Math.min(
+            6,
+            (
+              excerpt.content.match(
+                /\b(?:await|throw|catch|publish|ack|insert|write|spawn)\b/gi,
+              ) ?? []
+            ).length,
+          );
+        hits.push({ excerpt, score });
+      }
+    }
+    const selected: CodeExcerpt[] = [];
+    const ranked = hits.sort((a, b) => b.score - a.score);
+    // Cover different implementation files before spending the budget on a second window.
+    const first = new Set<string>();
+    const ordered = [
+      ...ranked.filter((hit) => {
+        const path = hit.excerpt.reference.path;
+        if (first.has(path)) return false;
+        first.add(path);
+        return true;
+      }),
+      ...ranked,
+    ];
+    for (const { excerpt } of ordered) {
+      if (
+        selected.some(
+          (item) =>
+            item.reference.path === excerpt.reference.path &&
+            Math.max(item.reference.startLine, excerpt.reference.startLine) <=
+              Math.min(item.reference.endLine, excerpt.reference.endLine),
+        )
+      )
+        continue;
+      if (
+        selected.filter(
+          (item) => item.reference.path === excerpt.reference.path,
+        ).length >= 2
+      )
+        continue;
+      selected.push(excerpt);
+      if (selected.length >= limit) break;
+    }
+    return selected;
+  }
   search(
     query: string,
     mode: RepositoryContextMode = "current",

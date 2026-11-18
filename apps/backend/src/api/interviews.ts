@@ -15,7 +15,10 @@ const createInterviewSchema = z.union([
   }),
 ]);
 
-export function createInterviewsRouter(service: InterviewService): Hono {
+export function createInterviewsRouter(
+  service: InterviewService,
+  githubStorage: "postgres" | "memory" = "postgres",
+): Hono {
   const app = new Hono();
 
   app.get("/", async (c) => {
@@ -91,6 +94,7 @@ export function createInterviewsRouter(service: InterviewService): Hono {
       mode: "GITHUB",
       status: interview.status,
       githubUrl: interview.githubUrl,
+      resumePolicy: githubStorage === "memory" ? "restart" : "resume",
       error: interview.error ?? undefined,
       createdAt: interview.createdAt,
       preparationStage: interview.interviewPlan

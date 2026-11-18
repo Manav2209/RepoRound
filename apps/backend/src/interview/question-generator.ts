@@ -14,6 +14,7 @@ import {
   selectRelevantEvidence,
 } from "./memory-selector.js";
 import { ToolRegistry } from "./tools.js";
+import { usableDecisionQuestion } from "./decision-questions.js";
 import type {
   InterviewObjective,
   InterviewState,
@@ -65,6 +66,13 @@ export function buildGithubFallback({
   graphFact,
   variant = 0,
 }: GithubFallbackInput): string {
+  if (objective.decision) {
+    return action.type === "ASK_NEW_TOPIC"
+      ? objective.decision.question
+      : (objective.decision.followUps[
+          variant % Math.max(1, objective.decision.followUps.length)
+        ] ?? objective.decision.question);
+  }
   const kind = objectiveKind(objective);
   const topic = objective.topic.split(/\s+/).slice(0, 8).join(" ");
   let text: string;
@@ -160,7 +168,7 @@ function openingIntroduction(knowledge: RepositoryKnowledge): string {
     summary.length <= 135
       ? summary
       : `${summary.slice(0, 132).replace(/\s+\S*$/, "")}…`;
-  return `I've reviewed the project you shared. ${bounded}${/[.!?…]$/.test(bounded) ? "" : "."}`;
+  return `The project you've presented: ${bounded}${/[.!?…]$/.test(bounded) ? "" : "."}`;
 }
 
 export class QuestionGenerator {
@@ -177,6 +185,11 @@ export class QuestionGenerator {
     knowledge: RepositoryKnowledge,
     recentTurns: { role: string; text: string }[],
     remainingMinutes: number,
+    options: {
+      skipModel?: boolean;
+      proposal?: { question: string; referenceIndexes: number[] };
+      excerpts?: CodeExcerpt[];
+    } = {},
   ): Promise<QuestionRecord> {
     const kind = objectiveKind(objective);
     const reason: QuestionRecord["reason"] =
@@ -196,10 +209,68 @@ export class QuestionGenerator {
     const isOpening = kind === "OPENING" && !state.questions.length;
     let introduction = isOpening ? openingIntroduction(knowledge) : "";
 
+    if (objective.decision) {
+      const card = objective.decision;
+      const references = card.references.filter((ref) =>
+        knowledge.validReference(ref),
+      );
+      if (!references.length)
+        throw new Error("Prepared decision question lost its source evidence");
+      const asked = (text: string) =>
+        state.questions.some((item) =>
+          item.text.toLowerCase().endsWith(text.toLowerCase()),
+        );
+      let text =
+        action.type === "ASK_NEW_TOPIC"
+          ? card.question
+          : (card.followUps.find((question) => !asked(question)) ??
+            card.question);
+      const proposal = options.proposal;
+      const proposalReferences = proposal?.referenceIndexes.map(
+        (index) => options.excerpts?.[index]?.reference,
+      );
+      if (
+        action.type !== "ASK_NEW_TOPIC" &&
+        proposal &&
+        usableDecisionQuestion(proposal.question) &&
+        !asked(proposal.question) &&
+        proposalReferences?.length &&
+        proposalReferences.every(
+          (ref) =>
+            ref &&
+            knowledge.validReference(ref) &&
+            references.some(
+              (allowed) =>
+                allowed.path === ref.path &&
+                Math.max(allowed.startLine, ref.startLine) <=
+                  Math.min(allowed.endLine, ref.endLine),
+            ),
+        )
+      )
+        text = proposal.question;
+      if (!usableDecisionQuestion(text) || asked(text))
+        throw new Error("No unused grounded decision question available");
+      return {
+        id: newId("q"),
+        text: introduction ? `${introduction} ${text}` : text,
+        objectiveId: objective.id,
+        phase: objective.phase,
+        difficulty: state.difficulty,
+        reason,
+        askedAt: new Date().toISOString(),
+        repositoryReferences: references,
+        kind,
+      };
+    }
+
     const sourceExcerpts: CodeExcerpt[] = [];
     for (const source of objective.sources ?? []) {
       try {
-        const excerpt = knowledge.getFile(source.path, 1, 12);
+        const excerpt = knowledge.decisionExcerpts(
+          `${objective.topic} ${objective.description}`,
+          [source.path],
+          1,
+        )[0];
         if (excerpt) addExcerpt(sourceExcerpts, excerpt);
       } catch {
         /* unreadable or unsafe source path */
@@ -281,6 +352,7 @@ export class QuestionGenerator {
     let references: RepositoryReference[] = excerpts[0]?.reference
       ? [excerpts[0].reference]
       : [];
+    if (options.excerpts) excerpts = options.excerpts;
     const hasRepositoryGrounding =
       excerpts.length > 0 ||
       graphFacts.length > 0 ||
@@ -290,12 +362,11 @@ export class QuestionGenerator {
       kind === "APPLIED_DESIGN" ||
       hasRepositoryGrounding ||
       action.type !== "ASK_NEW_TOPIC";
-    if (canUseModel) {
+    if ((canUseModel && !options.skipModel) || options.proposal) {
       try {
-        const generated = await withTrace(
-          interviewId,
-          "question_generation",
-          () =>
+        const generated =
+          options.proposal ??
+          (await withTrace(interviewId, "question_generation", () =>
             structured(
               this.llm,
               isOpening ? openingSchema : schema,
@@ -360,7 +431,7 @@ export class QuestionGenerator {
               ],
               { maxTokens: 220, timeoutMs: 4000, attempts: 1 },
             ),
-        );
+          ));
         const candidate = generated.question.trim();
         if (
           candidate.split(/\s+/).length <= 35 &&

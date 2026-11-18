@@ -10,6 +10,8 @@ import { AnswerAnalyzer } from "./answer-analyzer.js";
 import { deriveMemoryFacts } from "./memory-facts.js";
 import { isRepeatRequest, questionToRepeat } from "./repeat-question.js";
 import { SYSTEM_DESIGN_MAIN_QUESTIONS } from "../system-design/policy.js";
+import { activeSessions, ActiveSessionLostError } from "./active-sessions.js";
+import { planGithubTurn } from "./github-turn-planner.js";
 import { QuestionGenerator } from "./question-generator.js";
 import { prepareGithubObjectives, stateSchema } from "./schemas.js";
 import { withInterviewLock } from "./runtime-lock.js";
@@ -63,7 +65,22 @@ export function adaptDifficulty(
 }
 export type NextResponse =
   | { ended: true; deadlineAt?: string }
-  | { ended: false; questionId: string; question: string; deadlineAt?: string; checkpoint?: boolean; speak?: boolean };
+  | {
+      ended: false;
+      questionId: string;
+      question: string;
+      deadlineAt?: string;
+      checkpoint?: boolean;
+      speak?: boolean;
+      activeStorage?: "memory";
+    };
+type TurnInput = {
+  interviewId: string;
+  sessionId: string;
+  turnId: string;
+  text: string;
+  questionId?: string;
+};
 
 export class InterviewOrchestrator {
   private readonly analyzer: AnswerAnalyzer;
@@ -73,6 +90,10 @@ export class InterviewOrchestrator {
     private readonly durationMinutes = 30,
     private readonly githubDurationMinutes = 15,
     repositoryContextMode: RepositoryContextMode = "current",
+    private readonly options: {
+      activeStorage?: "postgres" | "memory";
+      githubTurnMode?: "separate" | "combined";
+    } = {},
   ) {
     this.analyzer = new AnswerAnalyzer(llm);
     this.generator = new QuestionGenerator(llm, repositoryContextMode);
@@ -90,8 +111,16 @@ export class InterviewOrchestrator {
           ended: false,
           questionId: question.id,
           question: question.text,
+          ...(state.activeStorage === "memory"
+            ? { activeStorage: "memory" as const }
+            : {}),
           deadlineAt: deadlineAt?.toISOString(),
-          ...(question.checkpoint ? { checkpoint: true, speak: !state.systemDesign?.problemSnapshot?.questionBank } : {}),
+          ...(question.checkpoint
+            ? {
+                checkpoint: true,
+                speak: !state.systemDesign?.problemSnapshot?.questionBank,
+              }
+            : {}),
         }
       : { ended: true };
   }
@@ -215,7 +244,13 @@ export class InterviewOrchestrator {
           revision: active.revision,
           store,
           askedProbeIds: sd.probesAsked,
-          coveredTopics: sd.answerAssessments.filter(assessment => assessment.addressedQuestion && assessment.strength === "STRONG").map(assessment => assessment.claimedGuaranteeOrTradeoff),
+          coveredTopics: sd.answerAssessments
+            .filter(
+              (assessment) =>
+                assessment.addressedQuestion &&
+                assessment.strength === "STRONG",
+            )
+            .map((assessment) => assessment.claimedGuaranteeOrTradeoff),
         });
         let probe = selectProbe(ctx);
         const excluded = [...sd.probesAsked];
@@ -338,6 +373,11 @@ export class InterviewOrchestrator {
   ): Promise<void> {
     state.memoryFacts = deriveMemoryFacts(state);
     stateSchema.parse(state);
+    const active = activeSessions.peek(interviewId);
+    if (active && !active.persisted) {
+      activeSessions.commit(interviewId, token, version, state, events, turn);
+      return;
+    }
     await prisma.$transaction(async (tx) => {
       const updated = await tx.interviewRuntime.updateMany({
         where: {
@@ -383,6 +423,22 @@ export class InterviewOrchestrator {
     });
   }
   async start(interviewId: string, sessionId?: string): Promise<NextResponse> {
+    const cached = activeSessions.peek(interviewId);
+    if (cached) {
+      if (sessionId) activeSessions.require(interviewId, sessionId);
+      if (
+        cached.frozen ||
+        cached.persisted ||
+        !cached.connected ||
+        cached.deadlineAt <= new Date()
+      )
+        return { ended: true };
+      return this.response(
+        cached.state,
+        cached.state.repeatedQuestionId ?? cached.state.questions.at(-1)?.id,
+        cached.deadlineAt,
+      );
+    }
     const interview = await prisma.interview.findUnique({
       where: { id: interviewId },
       include: {
@@ -426,75 +482,88 @@ export class InterviewOrchestrator {
       },
       update: {},
     });
-    return withInterviewLock(interviewId, async (token) => {
-      const row = await prisma.interviewRuntime.findUniqueOrThrow({
-        where: { interviewId },
-      });
-      const state = stateSchema.parse(row.data);
-      if (row.deadlineAt <= new Date()) {
-        state.ended = true;
-        state.endReason = "time_limit";
-        transition(state, "FINAL");
-        await this.save(interviewId, token, row.version, state);
-        return { ended: true };
-      }
-      if (state.questions.length || state.ended)
-        return this.response(
-          state,
-          state.repeatedQuestionId ?? state.questions.at(-1)?.id,
-          row.deadlineAt,
+    const response = await withInterviewLock<NextResponse>(
+      interviewId,
+      async (token) => {
+        const row = await prisma.interviewRuntime.findUniqueOrThrow({
+          where: { interviewId },
+        });
+        const state = stateSchema.parse(row.data);
+        if (state.activeStorage === "memory")
+          throw new ActiveSessionLostError(
+            "Active interview memory was lost; start a new interview",
+          );
+        if (row.deadlineAt <= new Date()) {
+          state.ended = true;
+          state.endReason = "time_limit";
+          transition(state, "FINAL");
+          await this.save(interviewId, token, row.version, state);
+          return { ended: true };
+        }
+        if (state.questions.length || state.ended)
+          return this.response(
+            state,
+            state.repeatedQuestionId ?? state.questions.at(-1)?.id,
+            row.deadlineAt,
+          );
+        const remainingMinutes = Math.max(
+          0,
+          Math.floor((row.deadlineAt.getTime() - Date.now()) / 60_000),
         );
-      const remainingMinutes = Math.max(
-        0,
-        Math.floor((row.deadlineAt.getTime() - Date.now()) / 60_000),
-      );
-      const action = selectGithubAction(state, remainingMinutes);
-      if (action.type === "END_INTERVIEW") {
-        state.ended = true;
-        state.endReason = "objectives_completed";
-        transition(state, "FINAL");
+        const action = selectGithubAction(state, remainingMinutes);
+        if (action.type === "END_INTERVIEW") {
+          state.ended = true;
+          state.endReason = "objectives_completed";
+          transition(state, "FINAL");
+          await this.save(interviewId, token, row.version, state, [
+            domainEvent(interviewId, "interview.ended", {
+              reason: state.endReason,
+            }),
+          ]);
+          return { ended: true };
+        }
+        const objective = state.objectives.find(
+          (item) => item.id === action.objectiveId,
+        );
+        if (!objective) throw new Error("No interview objectives");
+        const knowledge = await RepositoryKnowledge.load(interviewId);
+        const question = await this.generator.generate(
+          interviewId,
+          state,
+          objective,
+          action,
+          knowledge,
+          [],
+          remainingMinutes,
+          { skipModel: this.options.githubTurnMode === "combined" },
+        );
+        transition(state, objective.phase);
+        objective.status = "IN_PROGRESS";
+        state.questions.push(question);
+        recordGithubQuestion(state, objective, false);
         await this.save(interviewId, token, row.version, state, [
-          domainEvent(interviewId, "interview.ended", {
-            reason: state.endReason,
+          domainEvent(interviewId, "interview.started", {
+            phase: state.phase,
+            mode: "GITHUB",
+          }),
+          domainEvent(interviewId, "objective.started", {
+            objectiveId: objective.id,
+          }),
+          domainEvent(interviewId, "interviewer.question", {
+            questionId: question.id,
+            objectiveId: objective.id,
+            phase: state.phase,
+            kind: question.kind,
           }),
         ]);
-        return { ended: true };
-      }
-      const objective = state.objectives.find(
-        (item) => item.id === action.objectiveId,
-      );
-      if (!objective) throw new Error("No interview objectives");
-      const knowledge = await RepositoryKnowledge.load(interviewId);
-      const question = await this.generator.generate(
-        interviewId,
-        state,
-        objective,
-        action,
-        knowledge,
-        [],
-        remainingMinutes,
-      );
-      transition(state, objective.phase);
-      objective.status = "IN_PROGRESS";
-      state.questions.push(question);
-      recordGithubQuestion(state, objective, false);
-      await this.save(interviewId, token, row.version, state, [
-        domainEvent(interviewId, "interview.started", {
-          phase: state.phase,
-          mode: "GITHUB",
-        }),
-        domainEvent(interviewId, "objective.started", {
-          objectiveId: objective.id,
-        }),
-        domainEvent(interviewId, "interviewer.question", {
-          questionId: question.id,
-          objectiveId: objective.id,
-          phase: state.phase,
-          kind: question.kind,
-        }),
-      ]);
-      return this.response(state, question.id, row.deadlineAt);
-    });
+        return this.response(state, question.id, row.deadlineAt);
+      },
+    );
+    if (this.options.activeStorage === "memory" && sessionId && !response.ended)
+      await activeSessions.activate(interviewId, sessionId);
+    return !response.ended && activeSessions.peek(interviewId)
+      ? { ...response, activeStorage: "memory" }
+      : response;
   }
   private async startSystemDesign(
     interview: {
@@ -555,6 +624,10 @@ export class InterviewOrchestrator {
     interviewId: string,
     sessionId: string,
   ): Promise<void> {
+    if (activeSessions.peek(interviewId)) {
+      activeSessions.require(interviewId, sessionId);
+      return;
+    }
     const session = await prisma.interviewSession.findUnique({
       where: { id: sessionId },
     });
@@ -565,114 +638,381 @@ export class InterviewOrchestrator {
     )
       throw new Error("Invalid interview session");
   }
-  async processTurn(input: {
-    interviewId: string;
-    sessionId: string;
-    turnId: string;
-    text: string;
-    questionId?: string;
-  }): Promise<NextResponse> {
+  async processTurn(input: TurnInput): Promise<NextResponse> {
+    const active = activeSessions.peek(input.interviewId);
+    if (active) {
+      activeSessions.require(input.interviewId, input.sessionId);
+      if (active.persisted) return { ended: true };
+      if (!isRepeatRequest(input.text) && !active.turns.some(turn => turn.id === input.turnId))
+        activeSessions.addTurn(input.interviewId, { id: input.turnId, interviewId: input.interviewId, sessionId: input.sessionId, questionId: input.questionId, role: "user", text: input.text, turnIndex: active.turns.length, createdAt: new Date(), completedAt: new Date(), analysisStatus: "pending" });
+      return activeSessions.run(input.interviewId, input.turnId, (token, signal) =>
+        this.processTurnCore(input, { token, signal }),
+      );
+    }
+    return this.processTurnCore(input);
+  }
+  private async processTurnCore(input: TurnInput, owned?: { token: string; signal: AbortSignal }): Promise<NextResponse> {
+    owned?.signal.throwIfAborted();
+    const memory = activeSessions.peek(input.interviewId);
     await this.validateSession(input.interviewId, input.sessionId);
-    return withTrace(input.interviewId, isRepeatRequest(input.text) ? "repeat_request" : "candidate_turn", () =>
-      withInterviewLock(input.interviewId, async (token) => {
-        const row = await prisma.interviewRuntime.findUniqueOrThrow({
-          where: { interviewId: input.interviewId },
-        });
-        const state = stateSchema.parse(row.data);
-        const existing = await prisma.conversationTurn.findUnique({
-          where: { id: input.turnId },
-        });
-        if (
-          existing &&
-          (existing.interviewId !== input.interviewId ||
-            existing.sessionId !== input.sessionId ||
-            existing.text !== input.text ||
-            existing.role !== "user" ||
-            (input.questionId && existing.questionId !== input.questionId))
-        )
-          throw new Error("Turn ID conflicts with a different transcript");
-        const prior = state.processedTurns[input.turnId];
-        if (prior) return this.response(state, prior, row.deadlineAt);
-        const interview = await prisma.interview.findUniqueOrThrow({
-          where: { id: input.interviewId },
-        });
-        if (state.ended || interview.status !== "active")
-          return { ended: true };
-        if (isRepeatRequest(input.text)) {
-          const repeated = questionToRepeat(state);
-          if (!repeated) throw new Error("Interview has not started");
-          state.repeatedQuestionId = repeated.id;
-          state.processedTurns[input.turnId] = repeated.id;
-          if (state.systemDesign)
-            state.systemDesign.pendingQuestionId = repeated.id;
-          await this.save(input.interviewId, token, row.version, state, [
-            domainEvent(input.interviewId, "interviewer.question_repeated", {
-              questionId: repeated.id,
-            }),
-          ]);
-          return this.response(state, repeated.id, row.deadlineAt);
-        }
-        const lastQuestion =
-          state.questions.find(
-            (question) => question.id === state.repeatedQuestionId,
-          ) ?? state.questions.at(-1);
-        if (!lastQuestion) throw new Error("Interview has not started");
-        const questionId = input.questionId ?? lastQuestion.id;
-        if (!existing)
-          await prisma.conversationTurn.create({
-            data: {
+    const lock = memory
+      ? (operation: (token: string) => Promise<NextResponse>) =>
+          operation(owned!.token)
+      : (operation: (token: string) => Promise<NextResponse>) =>
+          withInterviewLock(input.interviewId, operation);
+    return withTrace(
+      input.interviewId,
+      isRepeatRequest(input.text) ? "repeat_request" : "candidate_turn",
+      () =>
+        lock(async (token) => {
+          const row = memory
+            ? {
+                interviewId: input.interviewId,
+                data: structuredClone(
+                  memory.state,
+                ) as unknown as Prisma.JsonValue,
+                version: memory.version,
+                deadlineAt: memory.deadlineAt,
+                updatedAt: new Date(),
+                leaseToken: token,
+                leaseUntil: null,
+              }
+            : await prisma.interviewRuntime.findUniqueOrThrow({
+                where: { interviewId: input.interviewId },
+              });
+          const state = stateSchema.parse(row.data);
+          if (state.activeStorage === "memory" && !memory && !state.activeFlushed)
+            throw new ActiveSessionLostError(
+              "Active interview memory was lost; start a new interview",
+            );
+          const existing = memory
+            ? memory.turns.find((item) => item.id === input.turnId)
+            : await prisma.conversationTurn.findUnique({
+                where: { id: input.turnId },
+              });
+          if (
+            existing &&
+            (existing.interviewId !== input.interviewId ||
+              existing.sessionId !== input.sessionId ||
+              existing.text !== input.text ||
+              existing.role !== "user" ||
+              (input.questionId && existing.questionId !== input.questionId))
+          )
+            throw new Error("Turn ID conflicts with a different transcript");
+          const prior = state.processedTurns[input.turnId];
+          if (prior) return this.response(state, prior, row.deadlineAt);
+          const interview = memory
+            ? {
+                id: input.interviewId,
+                mode: "GITHUB" as const,
+                status: "active",
+              }
+            : await prisma.interview.findUniqueOrThrow({
+                where: { id: input.interviewId },
+              });
+          if (state.ended || interview.status !== "active")
+            return { ended: true };
+          if (isRepeatRequest(input.text)) {
+            const repeated = questionToRepeat(state);
+            if (!repeated) throw new Error("Interview has not started");
+            state.repeatedQuestionId = repeated.id;
+            state.processedTurns[input.turnId] = repeated.id;
+            if (state.systemDesign)
+              state.systemDesign.pendingQuestionId = repeated.id;
+            await this.save(input.interviewId, token, row.version, state, [
+              domainEvent(input.interviewId, "interviewer.question_repeated", {
+                questionId: repeated.id,
+              }),
+            ]);
+            return this.response(state, repeated.id, row.deadlineAt);
+          }
+          const lastQuestion =
+            state.questions.find(
+              (question) => question.id === state.repeatedQuestionId,
+            ) ?? state.questions.at(-1);
+          if (!lastQuestion) throw new Error("Interview has not started");
+          const questionId = input.questionId ?? lastQuestion.id;
+          if (!existing && memory)
+            activeSessions.addTurn(input.interviewId, {
               id: input.turnId,
               interviewId: input.interviewId,
               sessionId: input.sessionId,
-              turnIndex: await prisma.conversationTurn.count({
-                where: { interviewId: input.interviewId },
-              }),
               role: "user",
               text: input.text,
               questionId,
+              turnIndex: memory.turns.length,
+              createdAt: new Date(),
               completedAt: new Date(),
-            },
-          });
-        if (questionId !== lastQuestion.id) {
-          state.processedTurns[input.turnId] = lastQuestion.id;
-          await this.save(input.interviewId, token, row.version, state, [], {
-            id: input.turnId,
-            status: "failed",
-            error: "Late answer will be analyzed after the interview",
-          });
-          return this.response(state, lastQuestion.id, row.deadlineAt);
-        }
-        if (lastQuestion.checkpoint)
-          return this.continueCheckpointTurn({
-            interviewId: input.interviewId,
-            token,
-            row,
+              analysisStatus: "pending",
+            });
+          if (!existing && !memory)
+            await prisma.conversationTurn.create({
+              data: {
+                id: input.turnId,
+                interviewId: input.interviewId,
+                sessionId: input.sessionId,
+                turnIndex: await prisma.conversationTurn.count({
+                  where: { interviewId: input.interviewId },
+                }),
+                role: "user",
+                text: input.text,
+                questionId,
+                completedAt: new Date(),
+              },
+            });
+          if (questionId !== lastQuestion.id) {
+            state.processedTurns[input.turnId] = lastQuestion.id;
+            await this.save(input.interviewId, token, row.version, state, [], {
+              id: input.turnId,
+              status: "failed",
+              error: "Late answer will be analyzed after the interview",
+            });
+            return this.response(state, lastQuestion.id, row.deadlineAt);
+          }
+          if (lastQuestion.checkpoint)
+            return this.continueCheckpointTurn({
+              interviewId: input.interviewId,
+              token,
+              row,
+              state,
+              turnId: input.turnId,
+              text: input.text,
+            });
+          // A replay can target the substantive question before a diagram
+          // checkpoint. Accept its answer instead of treating it as a UI choice.
+          if (state.repeatedQuestionId && state.systemDesign?.checkpoint) {
+            state.systemDesign.checkpoint.status = "RESOLVED";
+            state.systemDesign.checkpoint.resolvedAt = new Date().toISOString();
+          }
+          delete state.repeatedQuestionId;
+          lastQuestion.answerTurnId = input.turnId;
+          const events = [
+            domainEvent(input.interviewId, "candidate.transcript.final", {
+              turnId: input.turnId,
+              questionId,
+            }),
+          ];
+          if (
+            row.deadlineAt <= new Date() &&
+            interview.mode !== "SYSTEM_DESIGN"
+          ) {
+            state.ended = true;
+            state.endReason = "time_limit";
+            transition(state, "FINAL");
+            state.processedTurns[input.turnId] = "END";
+            await this.save(
+              input.interviewId,
+              token,
+              row.version,
+              state,
+              events,
+              {
+                id: input.turnId,
+                status: "failed",
+                error: "Analysis pending at deadline",
+              },
+            );
+            return { ended: true };
+          }
+          if (interview.mode === "SYSTEM_DESIGN")
+            return this.continueSystemDesign({
+              interviewId: input.interviewId,
+              token,
+              row,
+              state,
+              turnId: input.turnId,
+              text: input.text,
+              events,
+              question: lastQuestion,
+            });
+          const objective = state.objectives.find(
+            (o) => o.id === lastQuestion.objectiveId,
+          )!;
+          const knowledge =
+            memory?.knowledge ??
+            (await RepositoryKnowledge.load(input.interviewId));
+          const recent = memory
+            ? memory.turns
+                .slice(-4)
+                .map((item) => ({ role: item.role, text: item.text }))
+            : (
+                await prisma.conversationTurn.findMany({
+                  where: { interviewId: input.interviewId },
+                  orderBy: { createdAt: "desc" },
+                  take: 4,
+                  select: { role: true, text: true },
+                })
+              ).reverse();
+          let plan: Awaited<ReturnType<typeof planGithubTurn>> | undefined;
+          let failedAnalysis = false;
+          const beforeEvidence = state.evidence.length;
+          const beforeClaims = state.claims.length;
+          try {
+            if (this.options.githubTurnMode === "combined")
+              plan = await planGithubTurn({
+                llm: this.llm,
+                interviewId: input.interviewId,
+                state,
+                knowledge,
+                answer: input.text,
+                recentTurns: recent,
+                remainingMinutes: Math.max(
+                  0,
+                  (row.deadlineAt.getTime() - Date.now()) / 60_000,
+                ),
+              });
+            const analysis =
+              plan?.assessment ??
+              (await this.analyzer.analyze(
+                input.interviewId,
+                { id: input.turnId, text: input.text },
+                lastQuestion.text,
+                objective,
+                knowledge,
+              ));
+            this.analyzer.apply(state, input.turnId, objective, analysis);
+            objective.attempts++;
+            const strength = analysis.evidence.some(
+              (e) => e.strength === "STRONG",
+            )
+              ? "STRONG"
+              : analysis.evidence.some((e) => e.strength === "WEAK")
+                ? "WEAK"
+                : undefined;
+            const adapted = adaptDifficulty(state.difficulty, strength);
+            const difficulty = adapted === "EASY" ? "MEDIUM" : adapted;
+            if (difficulty !== state.difficulty)
+              events.push(
+                domainEvent(input.interviewId, "difficulty.changed", {
+                  from: state.difficulty,
+                  to: difficulty,
+                }),
+              );
+            state.difficulty = difficulty;
+          } catch {
+            owned?.signal.throwIfAborted();
+            failedAnalysis = true;
+            events.push(
+              domainEvent(input.interviewId, "analysis.failed", {
+                turnId: input.turnId,
+              }),
+            );
+          }
+          if (
+            (objective.attempts >= 2 ||
+              state.questions.filter((q) => q.objectiveId === objective.id)
+                .length >= 2) &&
+            objective.status !== "SATISFIED"
+          )
+            objective.status = "INSUFFICIENT";
+          if (objective.status === "SATISFIED")
+            events.push(
+              domainEvent(input.interviewId, "objective.satisfied", {
+                objectiveId: objective.id,
+              }),
+            );
+          for (const evidence of state.evidence.slice(beforeEvidence))
+            events.push(
+              domainEvent(input.interviewId, "candidate.evidence.recorded", {
+                evidenceId: evidence.id,
+                turnId: input.turnId,
+                objectiveId: objective.id,
+              }),
+            );
+          for (const claim of state.claims.slice(beforeClaims))
+            events.push(
+              domainEvent(input.interviewId, "candidate.claim.extracted", {
+                claimId: claim.id,
+                status: claim.status,
+                turnId: input.turnId,
+              }),
+            );
+          const remaining = Math.max(
+            0,
+            (row.deadlineAt.getTime() - Date.now()) / 60_000,
+          );
+          const action = selectGithubAction(
             state,
-            turnId: input.turnId,
-            text: input.text,
-          });
-        // A replay can target the substantive question before a diagram
-        // checkpoint. Accept its answer instead of treating it as a UI choice.
-        if (state.repeatedQuestionId && state.systemDesign?.checkpoint) {
-          state.systemDesign.checkpoint.status = "RESOLVED";
-          state.systemDesign.checkpoint.resolvedAt = new Date().toISOString();
-        }
-        delete state.repeatedQuestionId;
-        lastQuestion.answerTurnId = input.turnId;
-        const events = [
-          domainEvent(input.interviewId, "candidate.transcript.final", {
-            turnId: input.turnId,
-            questionId,
-          }),
-        ];
-        if (
-          row.deadlineAt <= new Date() &&
-          interview.mode !== "SYSTEM_DESIGN"
-        ) {
-          state.ended = true;
-          state.endReason = "time_limit";
-          transition(state, "FINAL");
-          state.processedTurns[input.turnId] = "END";
+            Math.floor(remaining),
+            failedAnalysis,
+          );
+          events.push(
+            domainEvent(input.interviewId, "next_action.selected", {
+              action: action.type,
+              remainingMinutes: remaining,
+            }),
+          );
+          if (action.type === "END_INTERVIEW") {
+            state.ended = true;
+            state.endReason = "objectives_completed";
+            transition(state, "FINAL");
+            state.processedTurns[input.turnId] = "END";
+          } else {
+            const next = state.objectives.find(
+              (o) => o.id === action.objectiveId,
+            )!;
+            for (const skipped of state.objectives)
+              if (
+                PHASES.indexOf(skipped.phase) < PHASES.indexOf(next.phase) &&
+                !["SATISFIED", "INSUFFICIENT"].includes(skipped.status)
+              )
+                skipped.status = "INSUFFICIENT";
+            if (state.phase !== next.phase) {
+              events.push(
+                domainEvent(input.interviewId, "phase.changed", {
+                  from: state.phase,
+                  to: next.phase,
+                }),
+              );
+              transition(state, next.phase);
+            }
+            const question = await this.generator.generate(
+              input.interviewId,
+              state,
+              next,
+              action,
+              knowledge,
+              recent,
+              remaining,
+              this.options.githubTurnMode === "combined"
+                ? {
+                    skipModel: true,
+                    proposal:
+                      plan?.nextQuestion?.objectiveId === next.id
+                        ? plan.nextQuestion
+                        : undefined,
+                    excerpts: plan?.excerpts,
+                  }
+                : {},
+            );
+            if (action.claimId) {
+              const claim = state.claims.find((c) => c.id === action.claimId);
+              if (claim) claim.probed = true;
+            }
+            const isFollowUp =
+              state.questions.at(-1)?.objectiveId === next.id &&
+              action.type !== "ASK_NEW_TOPIC";
+            next.status = "IN_PROGRESS";
+            state.questions.push({ ...question, sourceTurnId: input.turnId });
+            recordGithubQuestion(state, next, isFollowUp);
+            state.processedTurns[input.turnId] = question.id;
+            events.push(
+              domainEvent(input.interviewId, "interviewer.question", {
+                questionId: question.id,
+                objectiveId: next.id,
+                phase: state.phase,
+                action: action.type,
+                kind: question.kind,
+              }),
+            );
+          }
+          if (row.deadlineAt <= new Date()) {
+            state.ended = true;
+            state.endReason = "time_limit";
+            transition(state, "FINAL");
+            state.processedTurns[input.turnId] = "END";
+          }
+          owned?.signal.throwIfAborted();
           await this.save(
             input.interviewId,
             token,
@@ -681,189 +1021,23 @@ export class InterviewOrchestrator {
             events,
             {
               id: input.turnId,
-              status: "failed",
-              error: "Analysis pending at deadline",
+              status: failedAnalysis ? "failed" : "completed",
+              error: failedAnalysis
+                ? "Answer analysis failed and will be retried"
+                : undefined,
             },
           );
-          return { ended: true };
-        }
-        if (interview.mode === "SYSTEM_DESIGN")
-          return this.continueSystemDesign({
-            interviewId: input.interviewId,
-            token,
-            row,
+          return this.response(
             state,
-            turnId: input.turnId,
-            text: input.text,
-            events,
-            question: lastQuestion,
-          });
-        const objective = state.objectives.find(
-          (o) => o.id === lastQuestion.objectiveId,
-        )!;
-        const knowledge = await RepositoryKnowledge.load(input.interviewId);
-        let failedAnalysis = false;
-        const beforeEvidence = state.evidence.length;
-        const beforeClaims = state.claims.length;
-        try {
-          const analysis = await this.analyzer.analyze(
-            input.interviewId,
-            { id: input.turnId, text: input.text },
-            lastQuestion.text,
-            objective,
-            knowledge,
+            state.processedTurns[input.turnId],
+            row.deadlineAt,
           );
-          this.analyzer.apply(state, input.turnId, objective, analysis);
-          objective.attempts++;
-          const strength = analysis.evidence.some(
-            (e) => e.strength === "STRONG",
-          )
-            ? "STRONG"
-            : analysis.evidence.some((e) => e.strength === "WEAK")
-              ? "WEAK"
-              : undefined;
-          const adapted = adaptDifficulty(state.difficulty, strength);
-          const difficulty = adapted === "EASY" ? "MEDIUM" : adapted;
-          if (difficulty !== state.difficulty)
-            events.push(
-              domainEvent(input.interviewId, "difficulty.changed", {
-                from: state.difficulty,
-                to: difficulty,
-              }),
-            );
-          state.difficulty = difficulty;
-        } catch {
-          failedAnalysis = true;
-          events.push(
-            domainEvent(input.interviewId, "analysis.failed", {
-              turnId: input.turnId,
-            }),
-          );
-        }
-        if (
-          (objective.attempts >= 2 ||
-            state.questions.filter((q) => q.objectiveId === objective.id)
-              .length >= 2) &&
-          objective.status !== "SATISFIED"
-        )
-          objective.status = "INSUFFICIENT";
-        if (objective.status === "SATISFIED")
-          events.push(
-            domainEvent(input.interviewId, "objective.satisfied", {
-              objectiveId: objective.id,
-            }),
-          );
-        for (const evidence of state.evidence.slice(beforeEvidence))
-          events.push(
-            domainEvent(input.interviewId, "candidate.evidence.recorded", {
-              evidenceId: evidence.id,
-              turnId: input.turnId,
-              objectiveId: objective.id,
-            }),
-          );
-        for (const claim of state.claims.slice(beforeClaims))
-          events.push(
-            domainEvent(input.interviewId, "candidate.claim.extracted", {
-              claimId: claim.id,
-              status: claim.status,
-              turnId: input.turnId,
-            }),
-          );
-        const remaining = Math.max(
-          0,
-          (row.deadlineAt.getTime() - Date.now()) / 60_000,
-        );
-        const action = selectGithubAction(
-          state,
-          Math.floor(remaining),
-          failedAnalysis,
-        );
-        events.push(
-          domainEvent(input.interviewId, "next_action.selected", {
-            action: action.type,
-            remainingMinutes: remaining,
-          }),
-        );
-        if (action.type === "END_INTERVIEW") {
-          state.ended = true;
-          state.endReason = "objectives_completed";
-          transition(state, "FINAL");
-          state.processedTurns[input.turnId] = "END";
-        } else {
-          const next = state.objectives.find(
-            (o) => o.id === action.objectiveId,
-          )!;
-          for (const skipped of state.objectives)
-            if (
-              PHASES.indexOf(skipped.phase) < PHASES.indexOf(next.phase) &&
-              !["SATISFIED", "INSUFFICIENT"].includes(skipped.status)
-            )
-              skipped.status = "INSUFFICIENT";
-          if (state.phase !== next.phase) {
-            events.push(
-              domainEvent(input.interviewId, "phase.changed", {
-                from: state.phase,
-                to: next.phase,
-              }),
-            );
-            transition(state, next.phase);
-          }
-          const recent = await prisma.conversationTurn.findMany({
-            where: { interviewId: input.interviewId },
-            orderBy: { createdAt: "desc" },
-            take: 4,
-            select: { role: true, text: true },
-          });
-          const question = await this.generator.generate(
-            input.interviewId,
-            state,
-            next,
-            action,
-            knowledge,
-            recent.reverse(),
-            remaining,
-          );
-          if (action.claimId) {
-            const claim = state.claims.find((c) => c.id === action.claimId);
-            if (claim) claim.probed = true;
-          }
-          const isFollowUp =
-            state.questions.at(-1)?.objectiveId === next.id &&
-            action.type !== "ASK_NEW_TOPIC";
-          next.status = "IN_PROGRESS";
-          state.questions.push({ ...question, sourceTurnId: input.turnId });
-          recordGithubQuestion(state, next, isFollowUp);
-          state.processedTurns[input.turnId] = question.id;
-          events.push(
-            domainEvent(input.interviewId, "interviewer.question", {
-              questionId: question.id,
-              objectiveId: next.id,
-              phase: state.phase,
-              action: action.type,
-              kind: question.kind,
-            }),
-          );
-        }
-        if (row.deadlineAt <= new Date()) {
-          state.ended = true;
-          state.endReason = "time_limit";
-          transition(state, "FINAL");
-          state.processedTurns[input.turnId] = "END";
-        }
-        await this.save(input.interviewId, token, row.version, state, events, {
-          id: input.turnId,
-          status: failedAnalysis ? "failed" : "completed",
-          error: failedAnalysis
-            ? "Answer analysis failed and will be retried"
-            : undefined,
-        });
-        return this.response(
-          state,
-          state.processedTurns[input.turnId],
-          row.deadlineAt,
-        );
-      }),
-      { turnId: input.turnId, questionId: input.questionId },
+        }),
+      {
+        turnId: input.turnId,
+        questionId: input.questionId,
+        signal: owned?.signal,
+      },
     );
   }
   private async continueCheckpointTurn(input: {

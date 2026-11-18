@@ -4,6 +4,7 @@ import type { RealtimeEventInput } from "../db/repositories/realtime-event.repo.
 import { domainEvent } from "../observability/events.js";
 import { withInterviewLock } from "../interview/runtime-lock.js";
 import { stateSchema } from "../interview/schemas.js";
+import { activeSessions } from "../interview/active-sessions.js";
 
 export const realtimeEventSchema = z
   .object({
@@ -78,6 +79,10 @@ export async function requireSession(
   interviewId: string,
   sessionId: string,
 ): Promise<void> {
+  if (activeSessions.peek(interviewId)) {
+    activeSessions.require(interviewId, sessionId);
+    return;
+  }
   if (
     !(await prisma.interviewSession.findFirst({
       where: { id: sessionId, interviewId },
@@ -89,6 +94,78 @@ export async function requireSession(
 export class RealtimeEventService {
   async process(input: RealtimeEventInput): Promise<ProcessResult> {
     const event = realtimeEventSchema.parse(input);
+    const memory = activeSessions.peek(event.interviewId);
+    if (memory && !memory.persisted) {
+      activeSessions.require(event.interviewId, event.sessionId);
+      if (memory.eventIds.has(event.eventId)) return { outcome: "duplicate" };
+      let turnCreated = false;
+      if (event.type === "transcript.completed") {
+        const question = memory.state.questions.find(
+          (item) => item.id === event.payload.questionId,
+        );
+        if (!question && !memory.state.ended && !event.payload.interrupted)
+          throw new Error("Unknown spoken question");
+        const prior = memory.turns.find(
+          (item) => item.id === event.payload.turnId,
+        );
+        if (
+          prior &&
+          (prior.text !== event.payload.text ||
+            prior.sessionId !== event.sessionId)
+        )
+          throw new Error("Transcript ID conflicts with existing turn");
+        if (!prior && question) {
+          activeSessions.addTurn(event.interviewId, {
+            id: event.payload.turnId!,
+            interviewId: event.interviewId,
+            sessionId: event.sessionId,
+            questionId: question.id,
+            role: "assistant",
+            text: event.payload.text!,
+            turnIndex: memory.turns.length,
+            createdAt: new Date(),
+            completedAt: new Date(event.payload.completedAt ?? event.timestamp),
+            analysisStatus: "skipped",
+          });
+          turnCreated = true;
+        }
+        if (
+          question &&
+          !event.payload.interrupted &&
+          event.payload.text?.trim() === question.text.trim()
+        )
+          question.spokenAt = event.timestamp;
+      }
+      if (
+        (event.type === "voice.metrics" &&
+          event.payload.source === "disconnect") ||
+        event.type === "session.failed" ||
+        event.type === "session.disconnected"
+      ) {
+        memory.connected = false;
+        memory.disconnectedAt ??= new Date();
+        if (memory.current)
+          activeSessions.cancel(event.interviewId, memory.current.id);
+      }
+      activeSessions.record(event.interviewId, {
+        ...domainEvent(
+          event.interviewId,
+          event.type === "voice.metrics"
+            ? `voice.${event.payload.source}`
+            : `voice.${event.type}`,
+          {
+            sessionId: event.sessionId,
+            ...Object.fromEntries(
+              Object.entries(event.payload).filter(
+                ([key]) => !["text", "error", "detail", "role"].includes(key),
+              ),
+            ),
+          },
+        ),
+        id: event.eventId,
+      });
+      return { outcome: "created", turnCreated };
+    }
     await requireSession(event.interviewId, event.sessionId);
     if (
       await prisma.realtimeEvent.findUnique({
@@ -204,7 +281,11 @@ export class RealtimeEventService {
             {
               sessionId: event.sessionId,
               // Keep telemetry fields/correlation, never transcript/error text.
-              ...Object.fromEntries(Object.entries(event.payload).filter(([key]) => !["text", "error", "detail", "role"].includes(key))),
+              ...Object.fromEntries(
+                Object.entries(event.payload).filter(
+                  ([key]) => !["text", "error", "detail", "role"].includes(key),
+                ),
+              ),
             },
           ),
         });

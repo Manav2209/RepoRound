@@ -23,6 +23,7 @@ export default function InterviewRoom({
     agentState,
     agentReady,
     readyTimedOut,
+    resumePolicy,
     mute,
     unmute,
     endInterview,
@@ -60,13 +61,20 @@ export default function InterviewRoom({
             <p className="eyebrow">Interviewer unavailable</p>
             <h1>The interviewer isn’t available right now.</h1>
             <p className="subtitle">
-              The connection to your interviewer is unavailable. Reconnect to
-              resume your session.
+              {resumePolicy === "restart"
+                ? "The connection to your interviewer is unavailable. Start a new practice interview to continue."
+                : "The connection to your interviewer is unavailable. Reconnect to resume your session."}
             </p>
             <div className="preparation-actions">
-              <button type="button" onClick={retry}>
-                {disconnected ? "Reconnect" : "Try again"}
-              </button>
+              {resumePolicy === "restart" ? (
+                <Link href="/practice" className="primary">
+                  Start new interview
+                </Link>
+              ) : (
+                <button type="button" onClick={retry}>
+                  {disconnected ? "Reconnect" : "Try again"}
+                </button>
+              )}
               <Link href="/" className="secondary">
                 Back to home
               </Link>
@@ -146,11 +154,14 @@ export default function InterviewRoom({
         </p>
       )}
       <div className="controls">
-        {(status === "disconnected" || status === "failed") && (
-          <button type="button" onClick={reconnect}>
-            Reconnect
-          </button>
-        )}
+        {(status === "disconnected" || status === "failed") &&
+          (resumePolicy === "restart" ? (
+            <Link href="/practice">Start new interview</Link>
+          ) : (
+            <button type="button" onClick={reconnect}>
+              Reconnect
+            </button>
+          ))}
         <MicrophoneButton
           isMuted={isMuted}
           onToggle={isMuted ? unmute : mute}

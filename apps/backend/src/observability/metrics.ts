@@ -1,6 +1,7 @@
 import { Prisma, prisma } from "@repo/db";
 import { RepositoryKnowledge } from "../github/knowledge.js";
 import { stateSchema } from "../interview/schemas.js";
+import { activeSessions } from "../interview/active-sessions.js";
 import {
   InterviewBusyError,
   withInterviewLock,
@@ -482,14 +483,20 @@ export async function snapshotInterviewMetrics(
     take: 10_001,
     select: { type: true, payload: true },
   });
+  const memory = activeSessions.peek(interviewId);
+  const combined =
+    memory && !memory.persisted ? [...events, ...memory.events] : events;
   const summary = summarizeMetricEvents(
-    events.slice(0, 10_000),
-    events.length > 10_000,
+    combined.slice(0, 10_000),
+    combined.length > 10_000 || (memory?.droppedEvents ?? 0) > 0,
   );
   if (interview.runtime) {
-    const state = stateSchema.safeParse(interview.runtime.data);
+    const state = stateSchema.safeParse(
+      memory && !memory.persisted ? memory.state : interview.runtime.data,
+    );
     if (state.success && interview.mode === "GITHUB") {
-      const knowledge = await RepositoryKnowledge.load(interviewId);
+      const knowledge =
+        memory?.knowledge ?? (await RepositoryKnowledge.load(interviewId));
       const eligible = state.data.questions.filter(
         (question) =>
           question.kind === "OPENING" || question.kind === "REPOSITORY",
@@ -504,8 +511,16 @@ export async function snapshotInterviewMetrics(
       };
     }
   }
+  const finalState = stateSchema.safeParse(
+    memory && !memory.persisted ? memory.state : interview.runtime?.data,
+  );
   const data = {
-    status: interview.status,
+    status:
+      interview.status === "completed" &&
+      finalState.success &&
+      finalState.data.endReason === "disconnected"
+        ? "abandoned"
+        : interview.status,
     startedAt: interview.startedAt,
     completedAt: interview.completedAt,
     summary: summary as unknown as Prisma.InputJsonValue,

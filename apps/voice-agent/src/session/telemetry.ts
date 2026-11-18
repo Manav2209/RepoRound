@@ -32,6 +32,7 @@ type Turn = {
   speechId?: string;
   committedAt: number;
   ready: boolean;
+  readyAt?: number;
 };
 
 const nonnegative = (value: number | undefined): number | undefined =>
@@ -105,7 +106,29 @@ export class VoiceTelemetry {
   responseReady(turnId: string, questionId?: string): void {
     if (this.pending?.turnId !== turnId) return;
     this.pending.ready = true;
+    this.pending.readyAt = this.now();
     this.pending.questionId = questionId;
+  }
+
+  nodeEntered(turnId: string): void {
+    if (this.pending?.turnId !== turnId) return;
+    this.emit({
+      source: "node_entry",
+      turnId,
+      durationMs: Math.max(0, this.now() - this.pending.committedAt),
+      measurementKind: "worker_commit_to_custom_llm_node",
+    });
+  }
+
+  textHandoff(turnId: string): void {
+    if (this.pending?.turnId !== turnId || this.pending.readyAt === undefined)
+      return;
+    this.emit({
+      source: "text_handoff",
+      turnId,
+      durationMs: Math.max(0, this.now() - this.pending.readyAt),
+      measurementKind: "worker_backend_ready_to_text_yield",
+    });
   }
 
   speechCreated(speechId: string, source: string): void {
@@ -144,6 +167,15 @@ export class VoiceTelemetry {
     }
     const turn = this.pending;
     if (!turn || turn.speechId !== speechId || !turn.ready) return;
+    if (turn.readyAt !== undefined)
+      this.emit({
+        source: "response_render_start",
+        turnId: turn.turnId,
+        questionId: turn.questionId,
+        speechId,
+        durationMs: Math.max(0, this.now() - turn.readyAt),
+        measurementKind: "worker_backend_ready_to_engine_speaking_proxy",
+      });
     this.pending = undefined;
     this.emit({
       source: "response_start",

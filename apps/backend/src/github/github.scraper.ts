@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { posix } from "node:path";
 import type { GithubFile, ScrapedGithubRepo } from "./github.types.js";
 
 const API = "https://api.github.com";
@@ -28,10 +29,17 @@ function sourceRank(path: string): number {
   const filename = path.split("/").at(-1)!;
   if (testPattern.test(path)) return 4;
   if (configPattern.test(path)) return 3;
-  if (/^(?:index|main|server|app)\./i.test(filename)) return 0;
   if (
-    /engine|orchestrat|worker|queue|job|route|handler|controller|service|store|stream|client|session|schema|replay|outbox|health|resource/i.test(
-      filename,
+    /(?:eslint|prettier|tailwind|vite|next|vitest|jest)\.config|(?:eslint|typescript)-config\/|(?:^|\/)(?:infra\/docker|scripts?)\//i.test(
+      path,
+    )
+  )
+    return 3;
+  if (/^(?:index|main|server|app)\./i.test(filename)) return 0;
+  if (/workflow|security|outbox|consumer/i.test(filename)) return 0.5;
+  if (
+    /engine|orchestrat|worker|queue|job|route|handler|controller|service|store|stream|client|session|schema|replay|outbox|security|workflow|project|resource/i.test(
+      path,
     )
   )
     return 1;
@@ -49,6 +57,56 @@ function sourceGroup(path: string): string {
 }
 
 export type RepositoryContextMode = "current" | "diverse";
+
+/** Resolve literal local imports only; these establish dependencies, not runtime calls. */
+export function connectedSourcePaths(
+  files: { path: string; content: string }[],
+  tree: GithubFile[],
+): string[] {
+  const available = new Set(
+    tree
+      .filter(
+        (file) =>
+          file.size <= downloadByteLimit && isRepositorySource(file.path),
+      )
+      .map((file) => file.path),
+  );
+  const loaded = new Set(files.map((file) => file.path));
+  const paths = new Set<string>();
+  for (const file of files) {
+    for (const match of file.content.matchAll(
+      /(?:from\s*|import\s*\(|require\s*\()\s*["'](\.[^"']+)["']/g,
+    )) {
+      const base = posix.normalize(
+        posix.join(posix.dirname(file.path), match[1]!),
+      );
+      const stems = [base, base.replace(/\.[cm]?jsx?$/, "")];
+      const found = stems
+        .flatMap((stem) => [
+          stem,
+          ...[".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"].map(
+            (ext) => stem + ext,
+          ),
+        ])
+        .find(
+          (path) =>
+            available.has(path) &&
+            safeRepositoryPath(path) &&
+            !loaded.has(path),
+        );
+      if (found) paths.add(found);
+    }
+  }
+  const relevance = (path: string) =>
+    /(?:controller|handler|workflow|security|toolLoop)/i.test(path)
+      ? 0
+      : /(?:routes\/.*project|routes\/.*job|consumer|queue)/i.test(path)
+        ? 1
+        : path.startsWith("apps/")
+          ? 2
+          : 3;
+  return [...paths].sort((a, b) => relevance(a) - relevance(b));
+}
 
 export function isRepositorySource(path: string): boolean {
   return (
@@ -82,7 +140,7 @@ export function selectRepositoryFiles(
   const readmes = candidates
     .filter((file) => readmePattern.test(file.path))
     .sort(byDepth);
-  const selected = [...manifests.slice(0, 4), ...readmes.slice(0, 2)];
+  const selected = [...manifests.slice(0, 3), ...readmes.slice(0, 2)];
   const groups = new Map<string, GithubFile[]>();
   for (const file of candidates) {
     if (manifestPattern.test(file.path) || readmePattern.test(file.path))
@@ -92,11 +150,17 @@ export function selectRepositoryFiles(
     group.push(file);
     groups.set(key, group);
   }
-  const ranked = [...groups.values()].map((group) =>
+  const ranked = [...groups.values()].map((group) => {
     group.sort(
       (a, b) => sourceRank(a.path) - sourceRank(b.path) || byDepth(a, b),
-    ),
-  );
+    );
+    const [entry, ...rest] = group;
+    const rank = (file: GithubFile) =>
+      sourceRank(file.path) === 0 ? 2 : sourceRank(file.path);
+    return entry
+      ? [entry, ...rest.sort((a, b) => rank(a) - rank(b) || byDepth(a, b))]
+      : [];
+  });
   const codeGroups = ranked.map((group) =>
     group.filter((file) => sourceRank(file.path) < 3),
   );
@@ -111,7 +175,7 @@ export function selectRepositoryFiles(
   return [
     ...selected,
     ...ranked.flat().filter((file) => sourceRank(file.path) >= 3),
-    ...manifests.slice(4),
+    ...manifests.slice(3),
     ...readmes.slice(2),
   ].slice(0, fileLimit);
 }
@@ -156,7 +220,7 @@ export class GithubScraper {
   private readonly headers: Record<string, string>;
   constructor(
     headers: Record<string, string> = {},
-    private readonly contextMode: RepositoryContextMode = "current",
+    private readonly contextMode: RepositoryContextMode = "diverse",
     private readonly fetcher: (
       url: string,
       init?: RequestInit,
@@ -279,13 +343,16 @@ export class GithubScraper {
     const fileTails: { source: { content: string }; tail: string }[] = [];
     let remaining = sourceCharacterLimit;
     const selected = selectRepositoryFiles(tree, this.contextMode);
+    const primary =
+      this.contextMode === "diverse" ? selected.slice(0, 18) : selected;
+    const reserved = this.contextMode === "diverse" ? 32_000 : 0;
     for (
       let offset = 0;
-      offset < selected.length && remaining > 0;
+      offset < primary.length && remaining > reserved;
       offset += 4
     ) {
       const files = await Promise.all(
-        selected.slice(offset, offset + 4).map(async (file) => ({
+        primary.slice(offset, offset + 4).map(async (file) => ({
           path: file.path,
           content: await this.file(owner, name, commit.sha, file.path).catch(
             () => undefined,
@@ -293,8 +360,11 @@ export class GithubScraper {
         })),
       );
       for (const file of files)
-        if (file.content && remaining > 0) {
-          const bounded = file.content.slice(0, Math.min(10000, remaining));
+        if (file.content && remaining > reserved) {
+          const bounded = file.content.slice(
+            0,
+            Math.min(10000, remaining - reserved),
+          );
           const source = { path: file.path, content: bounded };
           sources.push(source);
           remaining -= bounded.length;
@@ -307,6 +377,32 @@ export class GithubScraper {
               tail: file.content.slice(bounded.length),
             });
         }
+    }
+    if (this.contextMode === "diverse") {
+      const attempted = new Set(primary.map((file) => file.path));
+      // A few bounded dependency reads connect entry points to handlers omitted by sampling.
+      for (
+        let attempt = 0;
+        attempt < 8 && sources.length < fileLimit && remaining > 0;
+        attempt++
+      ) {
+        const path = [
+          ...selected
+            .filter((file) => sourceRank(file.path) === 0.5)
+            .map((file) => file.path),
+          ...connectedSourcePaths(sources, tree),
+          ...selected.map((file) => file.path),
+        ].find((path) => !attempted.has(path));
+        if (!path) break;
+        attempted.add(path);
+        const content = await this.file(owner, name, commit.sha, path).catch(
+          () => undefined,
+        );
+        if (!content) continue;
+        const bounded = content.slice(0, Math.min(10000, remaining));
+        sources.push({ path, content: bounded });
+        remaining -= bounded.length;
+      }
     }
     for (const { source, tail } of fileTails) {
       if (remaining <= 0) break;

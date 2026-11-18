@@ -13,6 +13,7 @@ export interface LlmJsonOptions {
   maxTokens?: number;
   timeoutMs?: number;
   attempts?: number;
+  signal?: AbortSignal;
 }
 
 export class LlmClient {
@@ -77,7 +78,10 @@ export class LlmClient {
           max_tokens: Math.min(8192, options.maxTokens ?? 4096),
           stream: false,
         },
-        { timeout: options.timeoutMs ?? 12000 },
+        {
+          timeout: options.timeoutMs ?? 12000,
+          signal: options.signal ?? ctx?.signal,
+        },
       );
       tokenUsage = res.usage;
       return res.choices[0]?.message?.content ?? "";
@@ -116,8 +120,15 @@ export async function structured<S extends z.ZodTypeAny>(
       );
       return schema.parse(raw);
     } catch (err) {
+      (options.signal ?? interviewTrace.getStore()?.signal)?.throwIfAborted();
       error = err;
       if (err instanceof z.ZodError) {
+        console.error(
+          `[llm] invalid fields: ${err.issues
+            .map((issue) => `${issue.path.join(".")}:${issue.code}`)
+            .join(",")
+            .slice(0, 1000)}`,
+        );
         const shape =
           raw && typeof raw === "object" && !Array.isArray(raw)
             ? Object.keys(raw as Record<string, unknown>).join(",")

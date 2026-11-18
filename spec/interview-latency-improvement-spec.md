@@ -1,9 +1,53 @@
 # Interview latency and reliability improvements
 
-Status: proposed; implementation intentionally deferred. Merge the current
-`experiment/repository-context` snapshot first. Start a new branch from the merged
-base only after the user explicitly requests it. This document does not change
-the running application's storage, model calls, or turn handling.
+Status: implementation in progress on `perf/interview-response-latency`, created
+from merged `main` after PR #3 and the user's explicit instruction. The proposal
+and measured baseline remain below. Implemented changes and remaining validation
+are recorded here; performance goals are not achieved claims.
+
+## Implementation progress
+
+- Repository memory mode loads context once and processes active turns without
+  SQL, with one combined assessment/question request, local policy validation and
+  a grounded fallback. System Design retains its durable flow and question bank.
+- Completion atomically saves the available transcript, final state, events and
+  END intent, then runs report evaluation. Failed commits retain memory for retry;
+  closing-speech events are drained. Normal raw-data retention is unchanged.
+- Cancellation propagates to requests/model calls. Per-turn tokens and request
+  sequencing reject superseded results; unsaid committed questions can roll back.
+  Finalized revisions of an SDK message receive distinct operation IDs, while HTTP
+  retries retain one ID. The worker advances its current question on speech start.
+- Added worker node-entry, text-handoff and post-backend rendering measurements.
+  Intentional startup wait is unchanged. Fractional OTLP timestamps are converted
+  safely and report commits have an explicit 20-second transaction budget, with
+  model requests outside the transaction.
+- Fixed the voice Docker build's missing `@types/bun` development dependency and
+  verified its isolated build stage.
+- Tests cover zero SQL during active turns, replay, cancellation/rollback,
+  competing finalized fragments, completion commit failure/retry, and the restart
+  UX. Memory mode is single-owner and intentionally non-resumable after disconnect.
+
+Controlled six-turn results are in `spec/benchmarks/repository-db-before.json`,
+`repository-db-after.json`, `repository-live-before.json` and
+`repository-live-after.json`. The immediate-stub mean fell from 2886 ms to 44 ms,
+with SQL statement counts changing from 26-27 to zero. The live-provider backend
+median changed from 8917 ms (two calls) to 2872 ms (one call). The initial combined
+prompt copied confidence examples as strings; examples were corrected, and the
+final six combined samples had no assessment-schema failures. These are minimal
+scripted backend fixtures, not equivalent to the manual repository voice baseline
+or proof of semantic assessment quality.
+
+A real LiveKit smoke test with synthetic speech completed one answer, generated
+the report and verified normal raw-data cleanup (`repository-voice-smoke.json`).
+Candidate audio-source playout end to first received non-silent reply PCM was
+6083 ms. The worker's separate committed-turn-to-speaking proxy was 5446 ms:
+12 ms node entry, 4127 ms backend round trip and 1304 ms after the backend reply.
+SDK end-of-utterance detection measured 1001 ms, and provider TTS first audio
+398 ms. These boundaries overlap and must not be added into a claimed total.
+This is one scripted turn, not browser-audible timing or an SLO. The three-second
+voice goal is not yet met; representative human turns and the 100-turn percentile
+validation remain outstanding. Shorter endpointing and speculative generation
+remain disabled pending pause/interruption tests.
 
 ## Goal and scope
 
@@ -22,9 +66,9 @@ including drawing, with three substantive questions from its pinned problem bank
 System design already uses one answer-assessment model call and deterministic
 question selection; do not introduce another question-generation call there.
 
-## Current implementation and observations
+## Merged baseline and observations
 
-The current repository pipeline is:
+Before this branch, the repository pipeline was:
 
 ```text
 Streaming STT + VAD

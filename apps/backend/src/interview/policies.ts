@@ -19,7 +19,7 @@ const policies = {
   INTRO:
     "Briefly summarize the submitted project from repository evidence, then ask one concrete technical question. Do not ask for a project introduction or personal ownership.",
   PROJECT_OVERVIEW:
-    "Trace a specific request or state change through the repository. Do not ask what the project does, who uses it, or what the candidate owned.",
+    "Ask what requirement or constraint the project's central implementation choice addresses. Use observed operations as context; avoid project introductions, ownership and code-recall questions.",
   ARCHITECTURE:
     "Ask about boundaries, responsibilities, and failure behavior. Prefer repository evidence.",
   IMPLEMENTATION:
@@ -27,7 +27,7 @@ const policies = {
   DEBUGGING:
     "Present one realistic failure grounded in the code and ask for a diagnosis.",
   TRADEOFFS:
-    "Ask what alternatives were considered and how workload or constraints would change the choice.",
+    "Explore a consequence of the observed approach or a plausible alternative. Do not assume an alternative was considered or a dependency was deliberately chosen.",
   FINAL: "Thank the candidate and close without scoring them.",
   COMPLETED: "The interview has ended.",
 } as const;

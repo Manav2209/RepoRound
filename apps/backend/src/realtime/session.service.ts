@@ -11,6 +11,7 @@ import { getActiveSubmission } from "../system-design/submissions.js";
 import { getProblem } from "../system-design/problems.js";
 import { objectivesForProblem } from "../interview/strategies/system-design.js";
 import { DEFAULT_SYSTEM_DESIGN_DURATION_MINUTES } from "../system-design/policy.js";
+import { activeSessions } from "../interview/active-sessions.js";
 
 export interface StartSessionResult {
   interviewId: string;
@@ -49,6 +50,16 @@ export class SessionService {
         include: { runtime: true, interviewPlan: true },
       });
       if (!interview) throw new SessionError("Interview not found", 404);
+      const saved = interview.runtime?.data as
+        { activeStorage?: string } | undefined;
+      if (saved?.activeStorage === "memory") {
+        const active = activeSessions.peek(interviewId);
+        if (!active || !active.connected || active.frozen || active.persisted)
+          throw new SessionError(
+            "Active interview is unavailable. Start a new interview.",
+            409,
+          );
+      }
       if (!["ready", "active"].includes(interview.status))
         throw new SessionError("Interview cannot be resumed", 409);
       if (interview.mode === "SYSTEM_DESIGN" && !activeDesign)
@@ -66,6 +77,8 @@ export class SessionService {
         where: { interviewId },
         orderBy: { createdAt: "desc" },
       });
+      if (saved?.activeStorage === "memory" && existing)
+        return { session: existing, dispatch: false };
       if (existing?.dispatchLeaseUntil && existing.dispatchLeaseUntil > now)
         throw new SessionError("Voice session is starting. Please retry.", 503);
       if (

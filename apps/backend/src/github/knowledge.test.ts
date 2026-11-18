@@ -4,6 +4,7 @@ import {
   GithubScraper,
   safeRepositoryPath,
   selectRepositoryFiles,
+  connectedSourcePaths,
 } from "./github.scraper.js";
 
 test("repository tools return bounded excerpts pinned to the fetched commit", () => {
@@ -43,6 +44,64 @@ test("repository tools return bounded excerpts pinned to the fetched commit", ()
   ).toBe(false);
   expect(() => knowledge.getFile("../.env")).toThrow("Unsafe");
   expect(knowledge.getFile("src/missing.ts")).toBeNull();
+});
+
+test("decision evidence reaches implementation below import prefixes and excludes tooling", () => {
+  const files = [
+    {
+      path: "src/jobs.ts",
+      content: [
+        ...Array.from(
+          { length: 90 },
+          () => 'import type { Job } from "types";',
+        ),
+        "export async function acceptGenerationJob(job) {",
+        "  await durableQueue.add(job);",
+        "  return { accepted: true };",
+        "}",
+      ].join("\n"),
+    },
+    {
+      path: "eslint.config.js",
+      content: "export const config = { jobs: true };",
+    },
+    {
+      path: "src/jobs.test.ts",
+      content: "export function testJob() { return true; }",
+    },
+  ];
+  const knowledge = new RepositoryKnowledge(
+    "a".repeat(40),
+    files,
+    indexSymbols(files),
+    {},
+  );
+  const excerpts = knowledge.decisionExcerpts(
+    "generation job acceptance",
+    ["src/jobs.ts"],
+    2,
+  );
+  expect(excerpts).toHaveLength(1);
+  expect(excerpts[0]!.reference.startLine).toBe(91);
+  expect(excerpts[0]!.content).toContain("await durableQueue.add");
+  expect(knowledge.validReference(excerpts[0]!.reference)).toBe(true);
+});
+
+test("local dependency discovery connects entry points to handlers without inventing external imports", () => {
+  const paths = connectedSourcePaths(
+    [
+      {
+        path: "apps/api/src/main.ts",
+        content:
+          'import { route } from "./routes/jobs.js"; import x from "express"; import y from "../../../../.env";',
+      },
+    ],
+    [
+      { path: "apps/api/src/routes/jobs.ts", size: 100 },
+      { path: ".env", size: 100 },
+    ],
+  );
+  expect(paths).toEqual(["apps/api/src/routes/jobs.ts"]);
 });
 
 test("repository paths and URLs reject traversal, secrets, credentials and other hosts", () => {

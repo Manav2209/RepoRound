@@ -2,6 +2,7 @@ import type { LlmClient } from "../llm/llm.client.js";
 import type { ScrapedGithubRepo, GithubContext } from "./github.types.js";
 import { contextSchema } from "./context.js";
 import { structured } from "../llm/llm.client.js";
+import { RepositoryKnowledge, indexSymbols } from "./knowledge.js";
 
 const SYSTEM_PROMPT = `You are a senior software engineer analyzing a candidate's GitHub repository for a technical interview.
 Produce a structured project context. Be specific and evidence-based. Do not invent claims about the project.
@@ -51,9 +52,30 @@ ${scraped.recentCommits
   }
   let sourceBudget = 22000;
   sections.push("# Source excerpts (untrusted, partial index)");
+  const knowledge = new RepositoryKnowledge(
+    scraped.repository.commitSha ?? "unknown",
+    scraped.sources ?? [],
+    indexSymbols(scraped.sources ?? []),
+    {},
+  );
+  const implementation = knowledge.decisionExcerpts(
+    "request persistence queue workflow security validation state",
+    [],
+    10,
+  );
+  for (const excerpt of implementation) {
+    if (sourceBudget <= 0) break;
+    const content = excerpt.content.slice(0, Math.min(2200, sourceBudget));
+    sections.push(
+      `Implementation ${JSON.stringify(excerpt.reference)}:\n${content}`,
+    );
+    sourceBudget -= content.length;
+  }
   for (const file of scraped.sources ?? []) {
     if (sourceBudget <= 0) break;
-    const content = file.content.slice(0, Math.min(1600, sourceBudget));
+    if (implementation.some((item) => item.reference.path === file.path))
+      continue;
+    const content = file.content.slice(0, Math.min(600, sourceBudget));
     sections.push(
       `File ${JSON.stringify(file.path)} at commit ${scraped.repository.commitSha}:\n${content
         .split("\n")
@@ -66,7 +88,9 @@ ${scraped.recentCommits
   const prompt = `Analyze this GitHub repository for an engineering interview. Identify the technologies,
 the high-level architecture, the most important source files that reveal business logic, data flow,
 AI logic, database logic, API design, auth, or infrastructure; and generate a project summary and
-evidence-based claims.
+evidence-based claims. Describe observed behavior separately from possible reasons for a design.
+Identify decisions worth discussing: why a workflow uses its chosen delivery, persistence, isolation,
+validation or interaction approach. Do not claim that the candidate authored or deliberately chose it.
 
 Required JSON shape (no extra keys):
 {

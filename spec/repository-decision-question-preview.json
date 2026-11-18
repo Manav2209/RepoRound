@@ -1,0 +1,81 @@
+{
+  "generatedAt": "2026-11-18T13:43:59.8391323Z",
+  "repository": {
+    "owner": "Manav2209",
+    "name": "lovable-v0",
+    "url": "https://github.com/Manav2209/lovable-v0",
+    "description": "Prompt-to-app builder: describe a product, an agent scaffolds and edits a React sandbox, and you get a live preview.",
+    "commitSha": "a41960356f8b05ae900d9e4263827e9cf2303ff2"
+  },
+  "methodology": "One preparation preview against public source using the configured interview model. No voice session or candidate answers. Illustrative question review; not a cross-repository quality benchmark.",
+  "questions": [
+    {
+      "topic": "Work delivery",
+      "question": "How does the message delivery mechanism impact the responsiveness of the system for users awaiting build results?",
+      "followUps": [
+        "What tradeoff does message delivery introduce for a user waiting for the result?",
+        "Could synchronous processing be a viable alternative for immediate feedback?"
+      ],
+      "assessmentFocus": "Relates message-based delivery to a concrete project requirement and acknowledges its consequence.",
+      "references": [
+        {
+          "path": "apps/control/src/index.ts",
+          "commitSha": "a41960356f8b05ae900d9e4263827e9cf2303ff2",
+          "startLine": 196,
+          "endLine": 255
+        }
+      ]
+    },
+    {
+      "topic": "Workspace access boundaries",
+      "question": "What specific risks does restricting file operations to the project's workspace mitigate?",
+      "followUps": [
+        "How would allowing broader file access impact security?",
+        "What mechanisms are in place to handle potential path traversal vulnerabilities?"
+      ],
+      "assessmentFocus": "Explains the requirement behind workspace access boundaries and their limits.",
+      "references": [
+        {
+          "path": "apps/control/src/agent/tool/security.ts",
+          "commitSha": "a41960356f8b05ae900d9e4263827e9cf2303ff2",
+          "startLine": 26,
+          "endLine": 85
+        }
+      ]
+    },
+    {
+      "topic": "Build acceptance",
+      "question": "What criteria determine if the validation outcome is sufficient for accepting the change?",
+      "followUps": [
+        "What additional check would establish that the requested behavior actually works?",
+        "How does the validation process handle potential discrepancies in the state?"
+      ],
+      "assessmentFocus": "Explains what build validation establishes and what additional evidence acceptance requires.",
+      "references": [
+        {
+          "path": "apps/control/src/agent/graphs/workflow.ts",
+          "commitSha": "a41960356f8b05ae900d9e4263827e9cf2303ff2",
+          "startLine": 209,
+          "endLine": 265
+        }
+      ]
+    },
+    {
+      "topic": "Project workload boundaries",
+      "question": "What specific benefits arise from managing resources separately for each project pod?",
+      "followUps": [
+        "How does this separation impact resource allocation efficiency?",
+        "What challenges might arise from maintaining separate project pods?"
+      ],
+      "assessmentFocus": "Explores the rationale behind resource management in project pods.",
+      "references": [
+        {
+          "path": "apps/orchestator/src/handler/project.ts",
+          "commitSha": "a41960356f8b05ae900d9e4263827e9cf2303ff2",
+          "startLine": 48,
+          "endLine": 83
+        }
+      ]
+    }
+  ]
+}

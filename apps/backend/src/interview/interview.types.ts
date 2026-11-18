@@ -49,6 +49,13 @@ export interface InterviewObjective {
   uncertainties?: string[];
   sources?: ObjectiveSource[];
   scenario?: AppliedScenario;
+  decision?: {
+    question: string;
+    followUps: string[];
+    observedBehavior: string;
+    assessmentFocus: string;
+    references: RepositoryReference[];
+  };
 }
 
 export interface GithubInterviewState {
@@ -197,6 +204,9 @@ export interface SystemDesignInterviewState {
 }
 
 export interface InterviewState {
+  activeStorage?: "memory";
+  activeOwner?: string;
+  activeFlushed?: boolean;
   memoryFacts?: MemoryFact[];
   mode?: "GITHUB" | "SYSTEM_DESIGN";
   github?: GithubInterviewState;

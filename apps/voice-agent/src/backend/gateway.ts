@@ -26,6 +26,7 @@ export interface QuestionResponse {
   deadlineAt?: string;
   checkpoint?: boolean;
   speak?: boolean;
+  activeStorage?: "memory";
 }
 export class BackendGateway {
   private readonly baseUrl: string;
@@ -47,12 +48,15 @@ export class BackendGateway {
   ): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 4; attempt++) {
+      init?.signal?.throwIfAborted();
       const startedAt = performance.now();
       let failed = true;
       try {
         const res = await fetch(`${this.baseUrl}${path}`, {
           ...init,
-          signal: AbortSignal.timeout(14000),
+          signal: init?.signal
+            ? AbortSignal.any([AbortSignal.timeout(14000), init.signal])
+            : AbortSignal.timeout(14000),
           headers: {
             authorization: `Bearer ${this.token}`,
             "content-type": "application/json",
@@ -71,6 +75,7 @@ export class BackendGateway {
           return value;
         }
       } catch (err) {
+        init?.signal?.throwIfAborted();
         if (err instanceof BackendRequestError) throw err;
         lastError = err;
       } finally {
@@ -84,7 +89,8 @@ export class BackendGateway {
               ...metricContext,
               attempt: attempt + 1,
               requestCount: 1,
-              failed,
+              failed: failed && !init?.signal?.aborted,
+              cancelled: init?.signal?.aborted ?? false,
             });
           } catch {
             /* metrics are best effort */
@@ -99,6 +105,7 @@ export class BackendGateway {
   private validateQuestion(value: QuestionResponse): QuestionResponse {
     if (
       typeof value.ended !== "boolean" ||
+      (value.activeStorage !== undefined && value.activeStorage !== "memory") ||
       (value.speak !== undefined && typeof value.speak !== "boolean") ||
       (value.checkpoint !== undefined &&
         typeof value.checkpoint !== "boolean") ||
@@ -146,6 +153,7 @@ export class BackendGateway {
     turnId: string,
     questionId: string,
     text: string,
+    signal?: AbortSignal,
   ): Promise<QuestionResponse> {
     return this.validateQuestion(
       await this.request(
@@ -153,9 +161,20 @@ export class BackendGateway {
         {
           method: "POST",
           body: JSON.stringify({ sessionId, turnId, questionId, text }),
+          signal,
         },
         { turnId, questionId, measurementKind: "worker_http_turn_attempt" },
       ),
+    );
+  }
+  cancelTurn(
+    interviewId: string,
+    sessionId: string,
+    turnId: string,
+  ): Promise<{ ok: boolean }> {
+    return this.request(
+      `/internal/interviews/${interviewId}/turns/${encodeURIComponent(turnId)}/cancel`,
+      { method: "POST", body: JSON.stringify({ sessionId }) },
     );
   }
   status(interviewId: string, sessionId: string): Promise<{ ended: boolean }> {

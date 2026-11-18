@@ -14,6 +14,10 @@ import { InterviewBusyError } from "../interview/runtime-lock.js";
 import { prisma } from "@repo/db";
 import { readGithubContext } from "../github/context.js";
 import { stateSchema } from "../interview/schemas.js";
+import {
+  activeSessions,
+  ActiveSessionLostError,
+} from "../interview/active-sessions.js";
 
 const id = z.string().min(1).max(100);
 export function createInternalRouter(
@@ -25,6 +29,10 @@ export function createInternalRouter(
   const app = new Hono();
   app.use("*", internalAuthFromConfig(config));
   app.onError((err, c) => {
+    if (err instanceof DOMException && err.name === "AbortError")
+      return c.json({ error: "Turn cancelled" }, 409);
+    if (err instanceof ActiveSessionLostError)
+      return c.json({ error: err.message }, 410);
     if (err instanceof InterviewBusyError) {
       c.header("Retry-After", "1");
       return c.json({ error: "Interview is processing another event" }, 503);
@@ -60,7 +68,12 @@ export function createInternalRouter(
       await c.req.json().catch(() => null),
     );
     if (!parsed.success) return c.json({ error: "Invalid event" }, 400);
-    if (!(await rateLimit(`agent:${parsed.data.sessionId}`, 180, 60_000)))
+    const memory = activeSessions.peek(parsed.data.interviewId);
+    if (
+      !(memory
+        ? activeSessions.admitEvent(memory.interviewId, parsed.data.sessionId)
+        : await rateLimit(`agent:${parsed.data.sessionId}`, 180, 60_000))
+    )
       return c.json({ error: "Too many events" }, 429);
     return c.json({ ok: true, ...(await events.process(parsed.data)) });
   });
@@ -87,7 +100,12 @@ export function createInternalRouter(
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success)
       return c.json({ error: "Invalid final candidate turn" }, 400);
-    if (!(await rateLimit(`turn:${parsed.data.sessionId}`, 30, 60_000)))
+    const memory = activeSessions.peek(c.req.param("interviewId"));
+    if (
+      !(memory
+        ? activeSessions.admitTurn(memory.interviewId, parsed.data.sessionId)
+        : await rateLimit(`turn:${parsed.data.sessionId}`, 30, 60_000))
+    )
       return c.json({ error: "Too many turns" }, 429);
     const result = await orchestrator.processTurn({
       interviewId: c.req.param("interviewId"),
@@ -96,11 +114,27 @@ export function createInternalRouter(
     if (result.ended) await evaluations.finalize(c.req.param("interviewId"));
     return c.json(result);
   });
+  app.post("/interviews/:interviewId/turns/:turnId/cancel", async (c) => {
+    const body = z.object({ sessionId: id }).parse(await c.req.json());
+    await requireSession(c.req.param("interviewId"), body.sessionId);
+    activeSessions.cancel(c.req.param("interviewId"), c.req.param("turnId"));
+    return c.json({ ok: true });
+  });
   app.get("/interviews/:interviewId/status", async (c) => {
     await requireSession(
       c.req.param("interviewId"),
       c.req.query("sessionId") ?? "",
     );
+    const memory = activeSessions.peek(c.req.param("interviewId"));
+    if (memory)
+      return c.json({
+        ended:
+          memory.state.ended ||
+          memory.frozen ||
+          !memory.connected ||
+          memory.deadlineAt <= new Date(),
+        deadlineAt: memory.deadlineAt.toISOString(),
+      });
     const interview = await prisma.interview.findUniqueOrThrow({
       where: { id: c.req.param("interviewId") },
       include: { runtime: true },
@@ -117,6 +151,14 @@ export function createInternalRouter(
       c.req.param("interviewId"),
       c.req.query("sessionId") ?? "",
     );
+    const memory = activeSessions.peek(c.req.param("interviewId"));
+    if (memory)
+      return c.json({
+        ended: memory.state.ended || memory.frozen || !memory.connected,
+        questionId: null,
+        question: null,
+        deadlineAt: memory.deadlineAt.toISOString(),
+      });
     const runtime = await prisma.interviewRuntime.findUnique({
       where: { interviewId: c.req.param("interviewId") },
     });
